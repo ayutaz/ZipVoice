@@ -85,44 +85,44 @@ isort .
 ```
 zipvoice/
 ├── bin/           # 実行スクリプト（訓練・推論・エクスポート）
-├── models/        # モデル定義（ZipVoice, ZipformerベースのFlow Matchingデコーダ）
-├── tokenizer/     # テキストトークナイザ（言語別：Emilia/LibriTTS/Espeak）
+├── models/        # モデル定義（ZipVoice, Flow Matchingデコーダ）
+├── tokenizer/     # テキストトークナイザ（Emilia/LibriTTS/Espeak）
 ├── dataset/       # データセット処理（Lhotse CutSetベース）
-├── eval/          # 評価メトリクス（話者類似度、MOS、WER）
-└── utils/         # ユーティリティ（学習率スケジューラ、チェックポイント管理等）
+├── eval/          # 評価メトリクス
+└── utils/         # ユーティリティ
 
-egs/               # 訓練レシピとサンプルスクリプト
+egs/               # 訓練レシピ
 runtime/           # 本番デプロイメント（NVIDIA Triton）
+```
+
+### モデル構造
+
+| コンポーネント | 役割 | 次元 |
+|--------------|------|-----|
+| Text Embedding | トークン→ベクトル | → 192 |
+| Text Encoder | テキスト条件生成 | → 100 |
+| FM Decoder | 速度場予測 | → 100 |
+| Euler Solver | ODE積分 | ノイズ→音声 |
+
+### Flow Matching
+
+- **訓練**: `xt = features*t + noise*(1-t)`、MSE損失で速度場を学習
+- **推論**: Euler法でnum_step回積分（デフォルト16ステップ）
+- **CFG**: `v = (1+s)*v_cond - s*v_uncond`
+
+### 処理フロー
+
+```
+テキスト → トークナイザ → Text Encoder → FM Decoder → Vocoder → 波形(24kHz)
 ```
 
 ### 主要コンポーネント
 
-**モデル (`zipvoice/models/`)**
-- `ZipVoice`: テキストエンコーダ（4層Zipformer）+ Flow Matchingデコーダ
-- `EulerSolver`: ODE求解器（Flow Matching用）
-- `Zipformer`/`ZipformerTwoStream`: 効率的なTransformerアーキテクチャ
+**モデル**: `ZipVoice`, `ZipVoiceDistill`, `ZipVoiceDialog`, `ZipVoiceDialogStereo`
 
-**トークナイザ (`zipvoice/tokenizer/`)**
-- `EmiliaTokenizer`: 中国語（ピンイン変換）
-- `LibriTTSTokenizer`: 英語（音素ベース）
-- `EspeakTokenizer`: 多言語対応（Espeak音素）
-- テキスト正規化：数字変換、句読点処理
+**トークナイザ**: `EmiliaTokenizer`(中国語), `LibriTTSTokenizer`(英語), `EspeakTokenizer`(多言語)
 
-**データ処理**
-- Lhotseライブラリによるマニフェスト管理
-- Vocos fbankによる音声特徴量抽出（24kHz、100次元）
-
-**訓練インフラ**
-- 分散訓練（DDP）対応
-- FP16混合精度
-- ScaledAdamオプティマイザ
-- Eden/FixedLRScheduler
-
-### 推論バックエンド
-1. **PyTorch**: ネイティブ推論
-2. **ONNX**: CPU向け（`infer_zipvoice_onnx`）、INT8量子化対応
-3. **TensorRT**: GPU高速化（約2倍のスループット）
-4. **Triton**: 本番サーバー（gRPC/HTTP API）
+**推論バックエンド**: PyTorch / ONNX / TensorRT / Triton
 
 ## 重要な実装詳細
 
