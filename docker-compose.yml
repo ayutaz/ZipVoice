@@ -37,6 +37,7 @@ services:
     working_dir: /workspace
 
     # Default command for training
+    # Using python directly since packages are installed via uv sync in Dockerfile
     command: >
       python -m zipvoice.bin.train_zipvoice
       --world-size 1
