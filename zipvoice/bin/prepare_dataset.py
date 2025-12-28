@@ -253,8 +253,14 @@ def prepare_dataset(
     cut_set = cut_set.trim_to_supervisions(keep_overlapping=False)
 
     logging.info(f"Saving file to {output_dir / file_name}")
-    # Step 5: Write manifests to disk
-    cut_set.to_file(output_dir / file_name)
+    # Step 5: Write manifests to disk with explicit UTF-8 encoding
+    import gzip
+    import json
+    output_path = output_dir / file_name
+    with gzip.open(output_path, "wt", encoding="utf-8") as f:
+        for cut in cut_set:
+            f.write(json.dumps(cut.to_dict(), ensure_ascii=False) + "\n")
+
     logging.info("Done!")
 
 
