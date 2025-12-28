@@ -11,5 +11,5 @@ This recipe contains the following examples:
 > **NOTE:**  [run_emilia.sh](run_emilia.sh) is the most complete example, which covers: data preparation, ZipVoice trainnig, ZipVoice-Distill training, onnx export, and inference with all PyTorch and ONNX models.
 
 >  **NOTE:** For evaluation, first install packages from [../../requirements_eval.txt](../../requirements_eval.txt)
-> 
-> `pip install -r ../../requirements_eval.txt`
+>
+> `uv pip install -r ../../requirements_eval.txt`

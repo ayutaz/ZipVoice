@@ -96,7 +96,7 @@ Launch the PyTriton server with speaker caching for improved performance:
 bash run.sh 7 7 zipvoice_distill
 ```
 > [!NOTE]
-> To use the PyTriton Server, you don't have to use the Docker environment. You can install it manually with `pip install nvidia-pytriton`.
+> To use the PyTriton Server, you don't have to use the Docker environment. You can install it manually with `uv pip install nvidia-pytriton`.
 
 
 ## Client Testing
@@ -166,10 +166,10 @@ Deploy an OpenAI-compatible TTS API service:
 # Clone the OpenAI bridge repository
 git clone https://github.com/yuekaizhang/Triton-OpenAI-Speech.git
 cd Triton-OpenAI-Speech
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 # Start the FastAPI bridge (after Triton service is running)
-python3 tts_server.py --url http://localhost:8000 \
+uv run python tts_server.py --url http://localhost:8000 \
     --ref_audios_dir ./ref_audios/ \
     --port 10086 \
     --default_sample_rate 24000

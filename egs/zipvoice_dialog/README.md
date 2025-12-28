@@ -8,5 +8,5 @@ This recipe contains the following examples:
 - Evaluate models with objective metrics reported in ZipVoice-Dialog paper, see [run_eval.sh](run_eval.sh).
 
 >  **NOTE:** For evaluation, first install packages from [../../requirements_eval.txt](../../requirements_eval.txt)
-> 
-> `pip install -r ../../requirements_eval.txt`
+>
+> `uv pip install -r ../../requirements_eval.txt`

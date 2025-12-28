@@ -99,29 +99,34 @@ ZipVoice is a series of fast and high-quality zero-shot TTS models based on flow
 
 ```bash
 git clone https://github.com/k2-fsa/ZipVoice.git
+cd ZipVoice
 ```
 
-### 2. (Optional) Create a Python virtual environment
+### 2. Install uv (if not already installed)
 
 ```bash
-python3 -m venv zipvoice
-source zipvoice/bin/activate
+# macOS / Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
 ```
 
 ### 3. Install the required packages
 
 ```bash
-pip install -r requirements.txt
+uv sync
+uv pip install piper-phonemize --find-links https://k2-fsa.github.io/icefall/piper_phonemize.html
 ```
 
-### 4. Install k2 for training or efficient inference
+### 4. (Optional) Install k2 for training or efficient inference
 
 **k2 is necessary for training** and can speed up inference. Nevertheless, you can still use the inference mode of ZipVoice without installing k2.
 
 > **Note:**  Make sure to install the k2 version that matches your PyTorch and CUDA version. For example, if you are using pytorch 2.5.1 and CUDA 12.1, you can install k2 as follows:
 
 ```bash
-pip install k2==1.24.4.dev20250208+cuda12.1.torch2.5.1 -f https://k2-fsa.github.io/k2/cuda.html
+uv pip install k2==1.24.4.dev20250208+cuda12.1.torch2.5.1 -f https://k2-fsa.github.io/k2/cuda.html
 ```
 
 Please refer to https://k2-fsa.org/get-started/k2/ for details.
@@ -130,7 +135,7 @@ Users in China mainland can refer to https://k2-fsa.org/zh-CN/get-started/k2/.
 - To check the k2 installation:
 
 ```bash
-python3 -c "import k2; print(k2.__file__)"
+uv run python -c "import k2; print(k2.__file__)"
 ```
 
 ## Usage
@@ -142,7 +147,7 @@ To generate single-speaker speech with our pre-trained ZipVoice or ZipVoice-Dist
 #### 1.1 Inference of a single sentence
 
 ```bash
-python3 -m zipvoice.bin.infer_zipvoice \
+uv run python -m zipvoice.bin.infer_zipvoice \
     --model-name zipvoice \
     --prompt-wav prompt.wav \
     --prompt-text "I am the transcription of the prompt wav." \
@@ -155,7 +160,7 @@ python3 -m zipvoice.bin.infer_zipvoice \
 #### 1.2 Inference of a list of sentences
 
 ```bash
-python3 -m zipvoice.bin.infer_zipvoice \
+uv run python -m zipvoice.bin.infer_zipvoice \
     --model-name zipvoice \
     --test-list test.tsv \
     --res-dir results
@@ -170,7 +175,7 @@ python3 -m zipvoice.bin.infer_zipvoice \
 To generate two-party spoken dialogues with our pre-trained ZipVoice-Dialogue or ZipVoice-Dialogue-Stereo models, use the following commands (Required models will be downloaded from HuggingFace):
 
 ```bash
-python3 -m zipvoice.bin.infer_zipvoice_dialog \
+uv run python -m zipvoice.bin.infer_zipvoice_dialog \
     --model-name "zipvoice_dialog" \
     --test-list test.tsv \
     --res-dir results
