@@ -46,7 +46,7 @@ ZipVoice is a series of fast and high-quality zero-shot TTS models based on flow
 
 - High-quality voice cloning: state-of-the-art performance in speaker similarity, intelligibility, and naturalness.
 
-- Multi-lingual: support Chinese and English.
+- Multi-lingual: support Chinese, English, and Japanese.
 
 - Multi-mode: support both single-speaker and dialogue speech generation.
 
@@ -119,9 +119,11 @@ uv sync
 uv pip install piper-phonemize --find-links https://k2-fsa.github.io/icefall/piper_phonemize.html
 ```
 
+> **For Japanese TTS:** The `pyopenjtalk-plus` package is already included in the dependencies for Japanese G2P (grapheme-to-phoneme) conversion.
+
 ### 4. (Optional) Install k2 for training or efficient inference
 
-**k2 is necessary for training** and can speed up inference. Nevertheless, you can still use the inference mode of ZipVoice without installing k2.
+k2 provides CUDA-optimized activation functions that speed up both training and inference. While k2 is **recommended for best performance**, ZipVoice will fall back to PyTorch implementations if k2 is not installed.
 
 > **Note:**  Make sure to install the k2 version that matches your PyTorch and CUDA version. For example, if you are using pytorch 2.5.1 and CUDA 12.1, you can install k2 as follows:
 
@@ -167,6 +169,23 @@ uv run python -m zipvoice.bin.infer_zipvoice \
 ```
 
 - Each line of `test.tsv` is in the format of `{wav_name}\t{prompt_transcription}\t{prompt_wav}\t{text}`.
+
+#### 1.3 Japanese TTS
+
+For Japanese text-to-speech, use the `--tokenizer japanese` option:
+
+```bash
+uv run python -m zipvoice.bin.infer_zipvoice \
+    --model-name zipvoice \
+    --tokenizer japanese \
+    --token-file data/tokens_japanese.txt \
+    --prompt-wav prompt.wav \
+    --prompt-text "プロンプト音声の書き起こし" \
+    --text "合成したいテキスト" \
+    --res-wav-path result.wav
+```
+
+> **Note:** Japanese TTS requires a fine-tuned model. See the [Japanese Training](#japanese-training) section for details on how to train a Japanese model.
 
 ### 2. Dialogue speech generation
 
@@ -265,6 +284,78 @@ If you have trouble connecting to HuggingFace when downloading the pre-trained m
 ## Train Your Own Model
 
 See the [egs](egs) directory for training, fine-tuning and evaluation examples.
+
+### Japanese Training
+
+To fine-tune ZipVoice for Japanese TTS, follow these steps:
+
+#### 1. Prepare your dataset
+
+Create a TSV file with the format: `{id}\t{text}\t{wav_path}`
+
+For the Tsukuyomi-chan Corpus, use the provided script:
+
+```bash
+uv run python egs/zipvoice/local/prepare_tsv_tsukuyomi.py \
+    --corpus-dir "path/to/tsukuyomi-corpus" \
+    --output data/raw/tsukuyomi_train.tsv
+```
+
+#### 2. Prepare manifests and features
+
+```bash
+# Create manifests
+uv run python -m zipvoice.bin.prepare_dataset \
+    --tsv-path data/raw/tsukuyomi_train.tsv \
+    --prefix tsukuyomi \
+    --subset raw_train \
+    --num-jobs 4 \
+    --output-dir data/manifests
+
+# Add tokens
+uv run python -m zipvoice.bin.prepare_tokens \
+    --input-file data/manifests/tsukuyomi_cuts_raw_train.jsonl.gz \
+    --output-file data/manifests/tsukuyomi_cuts_train.jsonl.gz \
+    --tokenizer japanese
+
+# Compute Fbank features
+uv run python -m zipvoice.bin.compute_fbank \
+    --source-dir data/manifests \
+    --dest-dir data/fbank \
+    --dataset tsukuyomi \
+    --subset train \
+    --num-jobs 4
+```
+
+#### 3. Generate Japanese token file
+
+```bash
+uv run python egs/zipvoice/local/prepare_tokens_japanese.py \
+    --output data/tokens_japanese.txt
+```
+
+#### 4. Fine-tune the model
+
+```bash
+uv run python -m zipvoice.bin.train_zipvoice \
+    --world-size 1 \
+    --use-fp16 1 \
+    --finetune 1 \
+    --base-lr 0.0001 \
+    --num-iters 10000 \
+    --max-duration 500 \
+    --model-config download/zipvoice/model.json \
+    --checkpoint download/zipvoice/model.pt \
+    --tokenizer japanese \
+    --token-file data/tokens_japanese.txt \
+    --train-manifest data/fbank/tsukuyomi_cuts_train.jsonl.gz \
+    --exp-dir exp/zipvoice_japanese \
+    --wandb-project zipvoice-japanese
+```
+
+> **Note:** Training logs are sent to [Weights & Biases](https://wandb.ai) by default. Use `--no-wandb` to disable.
+
+For a complete training recipe, see `egs/zipvoice/run_japanese.sh`.
 
 ## Production Deployment
 
