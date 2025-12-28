@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 
 import cn2an
 import inflect
+import jaconv
 
 
 class TextNormalizer(ABC):
@@ -167,4 +168,65 @@ class ChineseTextNormalizer(TextNormalizer):
         """Normalize text."""
         # Convert numbers to Chinese
         text = cn2an.transform(text, "an2cn")
+        return text
+
+
+class JapaneseTextNormalizer(TextNormalizer):
+    """
+    A class to handle preprocessing of Japanese text including normalization.
+
+    Handles:
+    - Full-width to half-width conversion for ASCII characters
+    - Whitespace normalization
+    - Punctuation normalization
+
+    Note: Number-to-Japanese conversion is handled by pyopenjtalk during G2P.
+    """
+
+    def __init__(self):
+        self._whitespace_re = re.compile(r"\s+")
+        # Japanese punctuation to ASCII mapping
+        self._punctuation_map = {
+            "。": ".",
+            "、": ",",
+            "！": "!",
+            "？": "?",
+            "：": ":",
+            "；": ";",
+            "（": "(",
+            "）": ")",
+            "「": '"',
+            "」": '"',
+            "『": '"',
+            "』": '"',
+            "【": "[",
+            "】": "]",
+            "・": " ",
+            "〜": "~",
+            "ー": "-",
+        }
+
+    def normalize(self, text: str) -> str:
+        """Normalize Japanese text.
+
+        Args:
+            text: Input Japanese text
+
+        Returns:
+            Normalized text with:
+            - Full-width ASCII converted to half-width
+            - Whitespace normalized
+            - Japanese punctuation converted to ASCII equivalents
+        """
+        # Convert full-width ASCII to half-width (numbers, alphabets)
+        text = jaconv.z2h(text, kana=False, digit=True, ascii=True)
+
+        # Normalize Japanese punctuation to ASCII
+        for jp_punct, ascii_punct in self._punctuation_map.items():
+            text = text.replace(jp_punct, ascii_punct)
+
+        # Normalize whitespace
+        text = self._whitespace_re.sub(" ", text)
+        text = text.strip()
+
         return text

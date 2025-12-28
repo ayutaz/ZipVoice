@@ -89,6 +89,7 @@ from zipvoice.models.zipvoice_distill import ZipVoiceDistill
 from zipvoice.tokenizer.tokenizer import (
     EmiliaTokenizer,
     EspeakTokenizer,
+    JapaneseTokenizer,
     LibriTTSTokenizer,
     SimpleTokenizer,
 )
@@ -339,7 +340,7 @@ def get_parser():
         "--tokenizer",
         type=str,
         default="emilia",
-        choices=["emilia", "libritts", "espeak", "simple"],
+        choices=["emilia", "libritts", "espeak", "simple", "japanese"],
         help="Tokenizer type.",
     )
 
@@ -893,6 +894,8 @@ def run(rank, world_size, args):
 
     if params.tokenizer == "emilia":
         tokenizer = EmiliaTokenizer(token_file=params.token_file)
+    elif params.tokenizer == "japanese":
+        tokenizer = JapaneseTokenizer(token_file=params.token_file)
     elif params.tokenizer == "libritts":
         tokenizer = LibriTTSTokenizer(token_file=params.token_file)
     elif params.tokenizer == "espeak":

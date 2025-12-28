@@ -75,6 +75,7 @@ from zipvoice.models.modules.solver import get_time_steps
 from zipvoice.tokenizer.tokenizer import (
     EmiliaTokenizer,
     EspeakTokenizer,
+    JapaneseTokenizer,
     LibriTTSTokenizer,
     SimpleTokenizer,
 )
@@ -136,7 +137,7 @@ def get_parser():
         "--tokenizer",
         type=str,
         default="emilia",
-        choices=["emilia", "libritts", "espeak", "simple"],
+        choices=["emilia", "libritts", "espeak", "simple", "japanese"],
         help="Tokenizer type.",
     )
 
@@ -850,6 +851,8 @@ def main():
 
     if params.tokenizer == "emilia":
         tokenizer = EmiliaTokenizer(token_file=token_file)
+    elif params.tokenizer == "japanese":
+        tokenizer = JapaneseTokenizer(token_file=token_file)
     elif params.tokenizer == "libritts":
         tokenizer = LibriTTSTokenizer(token_file=token_file)
     elif params.tokenizer == "espeak":

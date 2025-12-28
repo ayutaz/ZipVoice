@@ -27,7 +27,11 @@ from lhotse import CutSet
 from pypinyin import Style, lazy_pinyin
 from pypinyin.contrib.tone_convert import to_finals_tone3, to_initials
 
-from zipvoice.tokenizer.normalizer import ChineseTextNormalizer, EnglishTextNormalizer
+from zipvoice.tokenizer.normalizer import (
+    ChineseTextNormalizer,
+    EnglishTextNormalizer,
+    JapaneseTextNormalizer,
+)
 
 try:
     from piper_phonemize import phonemize_espeak
@@ -37,6 +41,11 @@ except Exception as ex:
         "pip install piper_phonemize -f \
             https://k2-fsa.github.io/icefall/piper_phonemize.html"
     )
+
+try:
+    import pyopenjtalk
+except ImportError:
+    pyopenjtalk = None
 
 jieba.default_logger.setLevel(logging.INFO)
 
@@ -533,6 +542,265 @@ class DialogTokenizer(EmiliaTokenizer):
         text = re.sub(r"\s*(\[S[12]\])\s*", r"\1", text)
         text = self.map_punctuations(text)
         return text
+
+
+class JapaneseTokenizer(Tokenizer):
+    """Tokenizer for Japanese text using pyopenjtalk for G2P.
+
+    Supports Japanese-English mixed text by automatically detecting
+    and processing each language segment appropriately.
+    """
+
+    # Pre-compiled regex patterns for performance
+    _PART_PATTERN = re.compile(r"[<[].*?[>\]]|.")
+    _SPLIT_PATTERN = re.compile(r"([<[].*?[>\]])")
+
+    def __init__(self, token_file: Optional[str] = None):
+        """
+        Args:
+            token_file: Path to the token file with '{token}\\t{token_id}' per line.
+        """
+        if pyopenjtalk is None:
+            raise RuntimeError(
+                "pyopenjtalk is not installed. Please run:\n"
+                "pip install pyopenjtalk-plus"
+            )
+
+        self.japanese_normalizer = JapaneseTextNormalizer()
+        self.english_normalizer = EnglishTextNormalizer()
+
+        self.has_tokens = False
+        if token_file is None:
+            logging.debug(
+                "Initialize Tokenizer without tokens file, "
+                "will fail when map to ids."
+            )
+            return
+
+        self.token2id: Dict[str, int] = {}
+        with open(token_file, "r", encoding="utf-8") as f:
+            for line in f.readlines():
+                info = line.rstrip().split("\t")
+                token, id = info[0], int(info[1])
+                assert token not in self.token2id, token
+                self.token2id[token] = id
+
+        self.pad_id = self.token2id["_"]  # padding
+        self.vocab_size = len(self.token2id)
+        self.has_tokens = True
+
+    def texts_to_token_ids(
+        self,
+        texts: List[str],
+    ) -> List[List[int]]:
+        return self.tokens_to_token_ids(self.texts_to_tokens(texts))
+
+    def preprocess_text(self, text: str) -> str:
+        """Preprocess text: normalize punctuation."""
+        return self.map_punctuations(text)
+
+    def texts_to_tokens(
+        self,
+        texts: List[str],
+    ) -> List[List[str]]:
+        for i in range(len(texts)):
+            texts[i] = self.preprocess_text(texts[i])
+
+        phoneme_list = []
+        for text in texts:
+            segments = self.get_segment(text)
+            all_phoneme = []
+            for seg in segments:
+                if seg[1] == "ja":
+                    phoneme = self.tokenize_JA(seg[0])
+                elif seg[1] == "en":
+                    phoneme = self.tokenize_EN(seg[0])
+                elif seg[1] == "tag":
+                    phoneme = [seg[0]]
+                else:
+                    logging.warning(
+                        f"No Japanese or English characters found, "
+                        f"skipping segment of unknown language: {seg}"
+                    )
+                    continue
+                all_phoneme += phoneme
+            phoneme_list.append(all_phoneme)
+        return phoneme_list
+
+    def tokens_to_token_ids(
+        self,
+        tokens_list: List[List[str]],
+    ) -> List[List[int]]:
+        assert self.has_tokens, "Please initialize Tokenizer with a tokens file."
+        token_ids_list = []
+
+        for tokens in tokens_list:
+            token_ids = []
+            for t in tokens:
+                if t not in self.token2id:
+                    logging.debug(f"Skip OOV {t}")
+                    continue
+                token_ids.append(self.token2id[t])
+
+            token_ids_list.append(token_ids)
+
+        return token_ids_list
+
+    def tokenize_JA(self, text: str) -> List[str]:
+        """Convert Japanese text to phonemes using pyopenjtalk.
+
+        Args:
+            text: Japanese text to convert.
+
+        Returns:
+            List of phoneme tokens.
+        """
+        try:
+            text = self.japanese_normalizer.normalize(text)
+            # pyopenjtalk.g2p returns space-separated phonemes
+            phonemes_str = pyopenjtalk.g2p(text)
+            # Split by space to get individual phonemes
+            phonemes = phonemes_str.split()
+            return phonemes
+        except Exception as ex:
+            logging.warning(f"Tokenization of Japanese texts failed: {ex}")
+            return []
+
+    def tokenize_EN(self, text: str) -> List[str]:
+        """Convert English text to phonemes using espeak.
+
+        Args:
+            text: English text to convert.
+
+        Returns:
+            List of phoneme tokens.
+        """
+        try:
+            text = self.english_normalizer.normalize(text)
+            tokens = phonemize_espeak(text, "en-us")
+            tokens = reduce(lambda x, y: x + y, tokens)
+            return tokens
+        except Exception as ex:
+            logging.warning(f"Tokenization of English texts failed: {ex}")
+            return []
+
+    def map_punctuations(self, text: str) -> str:
+        """Map Japanese punctuation to ASCII equivalents."""
+        text = text.replace("，", ",")
+        text = text.replace("。", ".")
+        text = text.replace("！", "!")
+        text = text.replace("？", "?")
+        text = text.replace("；", ";")
+        text = text.replace("：", ":")
+        text = text.replace("、", ",")
+        text = text.replace("'", "'")
+        text = text.replace(""", '"')
+        text = text.replace(""", '"')
+        text = text.replace("'", "'")
+        text = text.replace("⋯", "…")
+        text = text.replace("···", "…")
+        text = text.replace("・・・", "…")
+        text = text.replace("...", "…")
+        text = text.replace("「", '"')
+        text = text.replace("」", '"')
+        text = text.replace("『", '"')
+        text = text.replace("』", '"')
+        return text
+
+    def get_segment(self, text: str) -> List[tuple]:
+        """Split text into segments based on language (Japanese/English).
+
+        Args:
+            text: Input text to be segmented.
+
+        Returns:
+            List of tuples (segment_text, language_type).
+            Language types: 'ja', 'en', 'tag', 'other'
+        """
+        segments = []
+        types = []
+        temp_seg = ""
+        temp_lang = ""
+
+        # Split text into characters or special markers
+        text_parts = self._PART_PATTERN.findall(text)
+
+        for part in text_parts:
+            if self.is_japanese(part):
+                types.append("ja")
+            elif self.is_alphabet(part):
+                types.append("en")
+            else:
+                types.append("other")
+
+        assert len(types) == len(text_parts)
+
+        for i in range(len(types)):
+            if i == 0:
+                temp_seg += text_parts[i]
+                temp_lang = types[i]
+            else:
+                if temp_lang == "other":
+                    temp_seg += text_parts[i]
+                    temp_lang = types[i]
+                else:
+                    if types[i] in [temp_lang, "other"]:
+                        temp_seg += text_parts[i]
+                    else:
+                        segments.append((temp_seg, temp_lang))
+                        temp_seg = text_parts[i]
+                        temp_lang = types[i]
+
+        segments.append((temp_seg, temp_lang))
+
+        # Handle tags
+        segments = self.split_segments(segments)
+        return segments
+
+    def split_segments(self, segments: List[tuple]) -> List[tuple]:
+        """Split segments to handle special tags enclosed in []."""
+        result = []
+        for temp_seg, temp_lang in segments:
+            parts = self._SPLIT_PATTERN.split(temp_seg)
+            for part in parts:
+                if not part:
+                    continue
+                if self.is_tag(part):
+                    result.append((part, "tag"))
+                else:
+                    result.append((part, temp_lang))
+        return result
+
+    def is_japanese(self, char: str) -> bool:
+        """Check if a character is Japanese (hiragana, katakana, or kanji)."""
+        # Hiragana: U+3040-U+309F
+        if "\u3040" <= char <= "\u309f":
+            return True
+        # Katakana: U+30A0-U+30FF
+        if "\u30a0" <= char <= "\u30ff":
+            return True
+        # CJK Unified Ideographs (Kanji): U+4E00-U+9FAF
+        if "\u4e00" <= char <= "\u9faf":
+            return True
+        # Katakana Phonetic Extensions: U+31F0-U+31FF
+        if "\u31f0" <= char <= "\u31ff":
+            return True
+        # Halfwidth Katakana: U+FF65-U+FF9F
+        if "\uff65" <= char <= "\uff9f":
+            return True
+        return False
+
+    def is_alphabet(self, char: str) -> bool:
+        """Check if a character is an ASCII alphabet letter."""
+        if ("\u0041" <= char <= "\u005a") or ("\u0061" <= char <= "\u007a"):
+            return True
+        return False
+
+    def is_tag(self, part: str) -> bool:
+        """Check if a part is a special tag enclosed in []."""
+        if part.startswith("[") and part.endswith("]"):
+            return True
+        return False
 
 
 class LibriTTSTokenizer(Tokenizer):

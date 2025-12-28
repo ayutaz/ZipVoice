@@ -55,12 +55,21 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Optimizer
 from torch.utils.tensorboard import SummaryWriter
 
+try:
+    import wandb
+
+    WANDB_AVAILABLE = True
+except ImportError:
+    WANDB_AVAILABLE = False
+    wandb = None
+
 import zipvoice.utils.diagnostics as diagnostics
 from zipvoice.dataset.datamodule import TtsDataModule
 from zipvoice.models.zipvoice import ZipVoice
 from zipvoice.tokenizer.tokenizer import (
     EmiliaTokenizer,
     EspeakTokenizer,
+    JapaneseTokenizer,
     LibriTTSTokenizer,
     SimpleTokenizer,
 )
@@ -119,6 +128,33 @@ def get_parser():
         type=str2bool,
         default=True,
         help="Should various information be logged in tensorboard.",
+    )
+
+    parser.add_argument(
+        "--wandb",
+        type=str2bool,
+        default=True,
+        help="Enable wandb logging (default: True).",
+    )
+
+    parser.add_argument(
+        "--no-wandb",
+        action="store_true",
+        help="Disable wandb logging.",
+    )
+
+    parser.add_argument(
+        "--wandb-project",
+        type=str,
+        default="zipvoice",
+        help="Wandb project name.",
+    )
+
+    parser.add_argument(
+        "--wandb-run-name",
+        type=str,
+        default=None,
+        help="Wandb run name (default: exp_dir name).",
     )
 
     parser.add_argument(
@@ -349,7 +385,7 @@ def get_parser():
         "--tokenizer",
         type=str,
         default="emilia",
-        choices=["emilia", "libritts", "espeak", "simple"],
+        choices=["emilia", "libritts", "espeak", "simple", "japanese"],
         help="Tokenizer type.",
     )
 
@@ -495,6 +531,7 @@ def train_one_epoch(
     scaler: GradScaler,
     model_avg: Optional[nn.Module] = None,
     tb_writer: Optional[SummaryWriter] = None,
+    use_wandb: bool = False,
     world_size: int = 1,
     rank: int = 0,
 ) -> None:
@@ -714,6 +751,22 @@ def train_one_epoch(
                         params.batch_idx_train,
                     )
 
+            # Log to wandb
+            if use_wandb and wandb is not None:
+                wandb_log = {
+                    "train/learning_rate": cur_lr,
+                    "train/batch_idx": params.batch_idx_train,
+                    "train/epoch": params.cur_epoch,
+                }
+                # Add loss info
+                for key in loss_info.keys():
+                    wandb_log[f"train/current_{key}"] = loss_info[key]
+                for key in tot_loss.keys():
+                    wandb_log[f"train/tot_{key}"] = tot_loss[key]
+                if params.use_fp16:
+                    wandb_log["train/grad_scale"] = cur_grad_scale
+                wandb.log(wandb_log, step=params.batch_idx_train)
+
     loss_value = tot_loss["loss"]
     params.train_loss = loss_value
     if params.train_loss < params.best_train_loss:
@@ -894,6 +947,20 @@ def run(rank, world_size, args):
     else:
         tb_writer = None
 
+    # Initialize wandb
+    use_wandb = args.wandb and not args.no_wandb and WANDB_AVAILABLE and rank == 0
+    if use_wandb:
+        run_name = args.wandb_run_name or Path(params.exp_dir).name
+        wandb.init(
+            project=args.wandb_project,
+            name=run_name,
+            config=vars(params),
+            dir=params.exp_dir,
+        )
+        logging.info(f"Wandb initialized: project={args.wandb_project}, run={run_name}")
+    elif args.wandb and not WANDB_AVAILABLE:
+        logging.warning("wandb is not installed. Run 'pip install wandb' to enable.")
+
     if torch.cuda.is_available():
         params.device = torch.device("cuda", rank)
     else:
@@ -902,6 +969,8 @@ def run(rank, world_size, args):
 
     if params.tokenizer == "emilia":
         tokenizer = EmiliaTokenizer(token_file=params.token_file)
+    elif params.tokenizer == "japanese":
+        tokenizer = JapaneseTokenizer(token_file=params.token_file)
     elif params.tokenizer == "libritts":
         tokenizer = LibriTTSTokenizer(token_file=params.token_file)
     elif params.tokenizer == "espeak":
@@ -1075,6 +1144,7 @@ def run(rank, world_size, args):
             valid_dl=valid_dl,
             scaler=scaler,
             tb_writer=tb_writer,
+            use_wandb=use_wandb,
             world_size=world_size,
             rank=rank,
         )
@@ -1109,6 +1179,10 @@ def run(rank, world_size, args):
                 copyfile(src=filename, dst=best_valid_filename)
 
     logging.info("Done!")
+
+    # Finalize wandb
+    if use_wandb and wandb is not None:
+        wandb.finish()
 
     if world_size > 1:
         torch.distributed.barrier()
