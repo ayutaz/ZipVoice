@@ -1,122 +1,308 @@
-# 日本語サポート調査結果
+# ZipVoice 日本語サポート
 
-## 現状
+本ドキュメントでは、ZipVoiceの日本語ファインチューニング方法について説明します。
 
-ZipVoiceは現在、中国語（Mandarin）と英語をサポートしています。日本語は公式にはサポートされておらず、データ準備段階で日本語を含む発話は明示的に除外されています（`egs/zipvoice/local/preprocess_emilia.py`）。
+## 概要
 
-## 日本語対応の技術的可能性
+ZipVoiceは中国語・英語の事前学習モデルをベースに、日本語音声データでファインチューニングすることで日本語TTSを実現できます。
 
-日本語対応は技術的に実現可能です。以下のアプローチが考えられます。
+### 実装済み機能
 
-### アプローチ1: EspeakTokenizer使用（簡易）
+| 機能 | ファイル | 説明 |
+|------|---------|------|
+| JapaneseTokenizer | `zipvoice/tokenizer/tokenizer.py` | pyopenjtalk-plusによる日本語G2P |
+| JapaneseTextNormalizer | `zipvoice/tokenizer/normalizer.py` | 日英混合テキストの正規化 |
+| 語彙拡張 | `zipvoice/bin/train_zipvoice.py` | 日本語トークン追加時のembedding拡張 |
+| Docker環境 | `Dockerfile`, `docker-compose.yml` | k2ライブラリ対応のLinux環境 |
 
-espeak-ngは日本語（`ja`）をサポートしているため、既存の`EspeakTokenizer`をそのまま使用できます。
+---
 
-```bash
-uv run python -m zipvoice.bin.train_zipvoice \
-    --tokenizer espeak \
-    --lang ja \
-    --token-file data/tokens_ja.txt \
-    ...
+## クイックスタート
+
+### 前提条件
+
+- Docker Desktop（GPU対応）
+- NVIDIA GPU（8GB VRAM以上推奨）
+- 日本語音声データ（WAVファイル + 書き起こし）
+
+### Step 1: データ準備
+
+TSVファイルを作成します（タブ区切り）:
+
+```
+data/raw/custom_train.tsv
 ```
 
-**メリット**: 実装不要、すぐに試せる
-**デメリット**: 日本語の発音品質がespeak-ng依存
+```tsv
+utt_001	こんにちは、今日はいい天気ですね。	/path/to/audio/001.wav
+utt_002	私の名前は田中です。	/path/to/audio/002.wav
+...
+```
 
-### アプローチ2: pyopenjtalk使用（推奨）
+### Step 2: 事前学習モデルのダウンロード
 
-日本語G2P（Grapheme-to-Phoneme）にpyopenjtalkを使用する専用トークナイザを実装します。
+```bash
+huggingface-cli download --local-dir download k2-fsa/ZipVoice zipvoice/model.pt zipvoice/model.json
+```
 
-**必要な変更**:
+### Step 3: マニフェスト生成
 
-1. `JapaneseTokenizer`クラスの実装（`zipvoice/tokenizer/tokenizer.py`）
-2. `JapaneseTextNormalizer`の追加（`zipvoice/tokenizer/normalizer.py`）
-3. 訓練/推論スクリプトへの`--tokenizer japanese`オプション追加
-4. 日本語トークンファイル生成スクリプト
-5. ファインチューニングレシピ
+```bash
+# Windows環境でUTF-8を強制
+set PYTHONUTF8=1
 
-### 日英混合テキスト対応
+uv run python -m zipvoice.bin.prepare_dataset \
+    --tsv-path data/raw/custom_train.tsv \
+    --prefix custom \
+    --subset train \
+    --num-jobs 4 \
+    --output-dir data/manifests
+```
 
-既存の`EmiliaTokenizer`パターンに従い、日本語と英語を自動判別して処理することが可能です：
+### Step 4: トークン付加
 
-- 日本語セグメント → pyopenjtalk
-- 英語セグメント → espeak (en-us)
+```bash
+uv run python -m zipvoice.bin.prepare_tokens \
+    --input-file data/manifests/custom_cuts_train.jsonl.gz \
+    --output-file data/manifests/custom_cuts_train_tokens.jsonl.gz \
+    --tokenizer japanese
+```
 
-## pyopenjtalkの音素セット
+### Step 5: Fbank特徴量計算
 
-pyopenjtalkは以下の音素を出力します：
+```bash
+uv run python -m zipvoice.bin.compute_fbank \
+    --source-dir data/manifests \
+    --dest-dir data/fbank \
+    --dataset custom \
+    --subset train_tokens \
+    --num-jobs 4
+```
+
+### Step 6: パス変換（Windows→Linux）
+
+Docker内で使用するためにパスを変換:
+
+```bash
+uv run python scripts/convert_paths.py
+```
+
+### Step 7: Dockerでファインチューニング
+
+```bash
+docker-compose build
+docker-compose up zipvoice-train
+```
+
+### Step 8: 推論
+
+```bash
+# モデルディレクトリ準備
+mkdir -p exp/custom/infer
+cp exp/custom/checkpoint-10000.pt exp/custom/infer/model.pt
+cp download/zipvoice/model.json exp/custom/infer/model.json
+cp data/tokens_japanese_extended.txt exp/custom/infer/tokens.txt
+
+# 推論実行
+docker-compose run --rm zipvoice-shell python -m zipvoice.bin.infer_zipvoice \
+    --model-dir exp/custom/infer \
+    --tokenizer japanese \
+    --prompt-wav data/prompt.wav \
+    --prompt-text "プロンプト音声の書き起こし" \
+    --text "合成したいテキスト" \
+    --res-wav-path output.wav
+```
+
+---
+
+## 詳細設定
+
+### docker-compose.yml
+
+```yaml
+services:
+  zipvoice-train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zipvoice-japanese:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ./data:/workspace/data
+      - ./download:/workspace/download
+      - ./exp:/workspace/exp
+    environment:
+      - WANDB_API_KEY=${WANDB_API_KEY}
+      - CUDA_VISIBLE_DEVICES=0
+    command: >
+      python -m zipvoice.bin.train_zipvoice
+      --world-size 1
+      --use-fp16 1
+      --finetune 1
+      --base-lr 0.0001
+      --num-iters 10000
+      --save-every-n 1000
+      --max-duration 60
+      --model-config download/zipvoice/model.json
+      --checkpoint download/zipvoice/model.pt
+      --tokenizer japanese
+      --token-file data/tokens_japanese_extended.txt
+      --dataset custom
+      --train-manifest data/fbank/custom_cuts_train.jsonl.gz
+      --dev-manifest data/fbank/custom_cuts_dev.jsonl.gz
+      --exp-dir exp/custom
+      --wandb-project zipvoice-japanese
+```
+
+### 訓練パラメータ
+
+| パラメータ | 推奨値 | 説明 |
+|-----------|-------|------|
+| `--num-iters` | 10000-50000 | イテレーション数（データ量に応じて調整） |
+| `--base-lr` | 0.0001 | ファインチューニング用学習率 |
+| `--max-duration` | 60-120 | バッチあたりの音声長（秒） |
+| `--finetune` | 1 | FixedLRScheduler使用 |
+| `--save-every-n` | 1000 | チェックポイント保存間隔 |
+
+### トークンファイル生成
+
+新しいデータセットで訓練する場合、トークンファイルを生成:
+
+```bash
+uv run python -m zipvoice.bin.generate_tokens \
+    --manifest data/manifests/custom_cuts_train.jsonl.gz \
+    --tokenizer japanese \
+    --output data/tokens_japanese_custom.txt
+```
+
+---
+
+## 技術詳細
+
+### JapaneseTokenizer
+
+pyopenjtalk-plusを使用して日本語テキストを音素に変換します。
+
+```python
+from zipvoice.tokenizer import JapaneseTokenizer
+
+tokenizer = JapaneseTokenizer(token_file="data/tokens_japanese.txt")
+tokens = tokenizer.text_to_tokens("こんにちは")
+# Output: ['k', 'o', 'N', 'n', 'i', 'ch', 'i', 'w', 'a']
+```
+
+### 日本語音素セット
 
 | カテゴリ | 音素 |
 |---------|------|
 | 母音 | a, i, u, e, o |
 | 子音 | k, s, t, n, h, m, y, r, w, g, z, d, b, p |
 | 拗音 | ky, sh, ch, ny, hy, my, ry, gy, j, by, py |
-| その他 | ts, f, N（撥音）, cl（促音）, q（声門閉鎖） |
-| 韻律 | pau, sil |
+| 特殊 | N（撥音）, cl（促音）, pau（ポーズ） |
 
-### トークン設計
+### 語彙拡張
 
-既存のespeakトークンとの衝突を避けるため、日本語音素には`_JP`サフィックスを付与：
+事前学習モデル（360トークン）に日本語トークン（25個）を追加し、385トークンに拡張:
 
 ```
-a_JP    256
-i_JP    257
-k_JP    258
-N_JP    259  # 撥音
-cl_JP   260  # 促音
-...
+2025-12-28 07:16:58,804 INFO [train_zipvoice.py:1008] Vocabulary size mismatch: checkpoint=360, model=385. Extending embedding layer.
 ```
 
-## ファインチューニングワークフロー
+---
 
-1. **データ準備**: TSVファイル作成（`utt_id\tテキスト\twav_path`）
-2. **マニフェスト生成**: `uv run python -m zipvoice.bin.prepare_dataset`
-3. **トークン追加**: `uv run python -m zipvoice.bin.prepare_tokens --tokenizer japanese`
-4. **Fbank計算**: `uv run python -m zipvoice.bin.compute_fbank`
-5. **ファインチューニング**: `uv run python -m zipvoice.bin.train_zipvoice --finetune 1 --tokenizer japanese`
-6. **推論**: `uv run python -m zipvoice.bin.infer_zipvoice --tokenizer japanese`
+## トラブルシューティング
 
-## 語彙サイズの問題
+### k2ライブラリがWindows非対応
 
-事前学習済みモデルは固定の語彙サイズ（espeak + 中国語ピンイン）を持っています。日本語トークンを追加すると語彙が拡張されるため、ファインチューニング開始時にembedding層の拡張が必要です。
+**症状**: NaN勾配、訓練が発散
 
-**対策**:
-- 既存トークンの重みは保持
-- 新しい日本語トークンはランダム初期化
+**原因**: k2ライブラリ（Swoosh活性化関数）がWindowsで利用不可
 
-この処理は`zipvoice/bin/train_zipvoice.py`のチェックポイント読み込み部分に追加が必要です。
-
-## 必要な依存関係
+**解決策**: Docker環境（Linux）で訓練を実行
 
 ```bash
-uv add pyopenjtalk
+docker-compose up zipvoice-train
 ```
 
-## 日本語文字の検出（Unicode範囲）
+### UTF-8エンコーディングエラー
 
-```python
-def is_japanese(char: str) -> bool:
-    # ひらがな
-    if '\u3040' <= char <= '\u309f':
-        return True
-    # カタカナ
-    if '\u30a0' <= char <= '\u30ff':
-        return True
-    # 漢字（CJKと共通、文脈で判断）
-    if '\u4e00' <= char <= '\u9faf':
-        return True
-    return False
+**症状**: `UnicodeDecodeError: 'cp932' codec can't decode`
+
+**原因**: WindowsのデフォルトエンコーディングがCP932
+
+**解決策**:
+1. 環境変数設定: `set PYTHONUTF8=1`
+2. `prepare_dataset.py`で明示的にUTF-8指定（修正済み）
+
+### Docker内でファイルが見つからない
+
+**症状**: `FileNotFoundError: data\\fbank\\...`
+
+**原因**: Windowsパス（バックスラッシュ）がLinuxで認識されない
+
+**解決策**: パス変換スクリプトを実行
+
+```bash
+uv run python scripts/convert_paths.py
 ```
 
-## 参考ファイル
+---
 
-- `zipvoice/tokenizer/tokenizer.py` - トークナイザ実装
-- `zipvoice/tokenizer/normalizer.py` - テキスト正規化
-- `egs/zipvoice/run_finetune.sh` - ファインチューニングレシピ
-- `egs/zipvoice/local/preprocess_emilia.py` - 日本語除外ロジック（L97-149）
+## 訓練結果例
 
-## 実装の優先順位
+つくよみちゃんコーパス（100文、約30分）での訓練結果:
 
-1. **Phase 1**: JapaneseTokenizer + JapaneseTextNormalizer（日英混合対応含む）
-2. **Phase 2**: 訓練/推論スクリプト修正
-3. **Phase 3**: トークンファイル生成 + ファインチューニングレシピ
+| 指標 | 値 |
+|------|-----|
+| イテレーション | 10,000 |
+| エポック | 385 |
+| 初期Validation Loss | 0.1237 |
+| 最終Validation Loss | 0.0902 |
+| 訓練時間 | 約3時間 |
+| GPU使用メモリ | 約3.5GB |
+
+---
+
+## ファイル構成
+
+```
+ZipVoice/
+├── zipvoice/
+│   ├── tokenizer/
+│   │   ├── tokenizer.py      # JapaneseTokenizer
+│   │   └── normalizer.py     # JapaneseTextNormalizer
+│   └── bin/
+│       ├── train_zipvoice.py # 訓練スクリプト（語彙拡張対応）
+│       ├── infer_zipvoice.py # 推論スクリプト
+│       ├── prepare_dataset.py # マニフェスト生成（UTF-8対応）
+│       ├── prepare_tokens.py  # トークン付加
+│       └── compute_fbank.py   # Fbank特徴量計算
+├── scripts/
+│   └── convert_paths.py       # パス変換スクリプト
+├── data/
+│   ├── raw/                   # TSVファイル
+│   ├── manifests/             # Lhotseマニフェスト
+│   ├── fbank/                 # Fbank特徴量
+│   └── tokens_japanese_extended.txt
+├── download/
+│   └── zipvoice/              # 事前学習モデル
+├── exp/
+│   └── custom/                # 訓練出力
+├── Dockerfile
+└── docker-compose.yml
+```
+
+---
+
+## 参考リンク
+
+- [ZipVoice GitHub](https://github.com/k2-fsa/ZipVoice)
+- [pyopenjtalk-plus](https://github.com/sarulab-speech/pyopenjtalk-plus)
+- [Lhotse](https://github.com/lhotse-speech/lhotse)
+- [k2](https://github.com/k2-fsa/k2)
