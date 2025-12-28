@@ -818,6 +818,8 @@ def main():
     if torch.cuda.is_available():
         params.device = torch.device("cuda", 0)
         torch.backends.cudnn.benchmark = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
     elif torch.backends.mps.is_available():
         params.device = torch.device("mps")
     else:
@@ -826,6 +828,14 @@ def main():
 
     model = model.to(params.device)
     model.eval()
+
+    # Apply torch.compile for optimization (PyTorch 2.0+)
+    if torch.cuda.is_available() and hasattr(torch, "compile"):
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+            logging.info("Applied torch.compile optimization")
+        except Exception as e:
+            logging.warning(f"torch.compile failed, falling back to eager mode: {e}")
 
     if params.trt_engine_path:
         load_trt(model, params.trt_engine_path)
