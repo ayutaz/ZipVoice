@@ -208,7 +208,9 @@ class TtsDataModule:
             sampler=train_sampler,
             batch_size=None,
             num_workers=self.args.num_workers,
-            persistent_workers=False,
+            persistent_workers=True,
+            pin_memory=True,
+            prefetch_factor=2,
             worker_init_fn=worker_init_fn,
         )
 
@@ -236,7 +238,9 @@ class TtsDataModule:
             sampler=dev_sampler,
             batch_size=None,
             num_workers=2,
-            persistent_workers=False,
+            persistent_workers=True,
+            pin_memory=True,
+            prefetch_factor=2,
         )
 
         return dev_dl

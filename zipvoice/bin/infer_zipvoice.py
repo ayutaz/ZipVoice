@@ -555,7 +555,7 @@ def generate_sentence(
     for batch_tokens in tokens_batches:
         batch_prompt_tokens = prompt_tokens * len(batch_tokens)
 
-        batch_prompt_features = prompt_features.repeat(len(batch_tokens), 1, 1)
+        batch_prompt_features = prompt_features.expand(len(batch_tokens), -1, -1)
         batch_prompt_features_lens = torch.full(
             (len(batch_tokens),), prompt_features.size(1), device=device
         )
@@ -817,6 +817,7 @@ def main():
 
     if torch.cuda.is_available():
         params.device = torch.device("cuda", 0)
+        torch.backends.cudnn.benchmark = True
     elif torch.backends.mps.is_available():
         params.device = torch.device("mps")
     else:

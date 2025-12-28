@@ -19,7 +19,7 @@
 import logging
 import re
 from abc import ABC, abstractmethod
-from functools import reduce
+from functools import lru_cache, reduce
 from typing import Dict, List, Optional
 
 import jieba
@@ -39,6 +39,28 @@ except Exception as ex:
     )
 
 jieba.default_logger.setLevel(logging.INFO)
+
+
+# Cached lazy_pinyin for performance optimization
+@lru_cache(maxsize=10000)
+def _cached_lazy_pinyin_word(word: str) -> tuple:
+    """Cache pinyin conversion for individual words."""
+    return tuple(
+        lazy_pinyin(
+            [word],
+            style=Style.TONE3,
+            tone_sandhi=True,
+            neutral_tone_with_five=True,
+        )
+    )
+
+
+def cached_lazy_pinyin(segs: list) -> list:
+    """Convert a list of words to pinyin using cached results."""
+    result = []
+    for word in segs:
+        result.extend(_cached_lazy_pinyin_word(word))
+    return result
 
 
 class Tokenizer(ABC):
@@ -199,6 +221,10 @@ class EspeakTokenizer(Tokenizer):
 
 
 class EmiliaTokenizer(Tokenizer):
+    # Pre-compiled regex patterns for performance
+    _PART_PATTERN = re.compile(r"[<[].*?[>\]]|.")
+    _SPLIT_PATTERN = re.compile(r"([<[].*?[>\]])")
+
     def __init__(self, token_file: Optional[str] = None, token_type="phone"):
         """
         Args:
@@ -299,12 +325,7 @@ class EmiliaTokenizer(Tokenizer):
         try:
             text = self.chinese_normalizer.normalize(text)
             segs = list(jieba.cut(text))
-            full = lazy_pinyin(
-                segs,
-                style=Style.TONE3,
-                tone_sandhi=True,
-                neutral_tone_with_five=True,
-            )
+            full = cached_lazy_pinyin(segs)
             phones = []
             for x in full:
                 # valid pinyin (in tone3 style) is alphabet + 1 number in [1-5].
@@ -409,8 +430,7 @@ class EmiliaTokenizer(Tokenizer):
 
         # Each part is a character, or a special string enclosed in <> and []
         # <> denotes pinyin string, [] denotes other special strings.
-        _part_pattern = re.compile(r"[<[].*?[>\]]|.")
-        text = _part_pattern.findall(text)
+        text = self._PART_PATTERN.findall(text)
 
         for i, part in enumerate(text):
             if self.is_chinese(part) or self.is_pinyin(part):
@@ -460,7 +480,7 @@ class EmiliaTokenizer(Tokenizer):
         """
         result = []
         for temp_seg, temp_lang in segments:
-            parts = re.split(r"([<[].*?[>\]])", temp_seg)
+            parts = self._SPLIT_PATTERN.split(temp_seg)
             for part in parts:
                 if not part:
                     continue

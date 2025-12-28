@@ -940,7 +940,12 @@ def run(rank, world_size, args):
     model = model.to(params.device)
     if world_size > 1:
         logging.info("Using DDP")
-        model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+        model = DDP(
+            model,
+            device_ids=[rank],
+            find_unused_parameters=False,
+            gradient_as_bucket_view=True,
+        )
 
     optimizer = ScaledAdam(
         get_parameter_groups_with_lrs(

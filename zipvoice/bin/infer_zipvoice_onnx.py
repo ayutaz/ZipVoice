@@ -282,6 +282,9 @@ class OnnxModel:
         session_opts = ort.SessionOptions()
         session_opts.inter_op_num_threads = num_thread
         session_opts.intra_op_num_threads = num_thread
+        session_opts.graph_optimization_level = (
+            ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        )
 
         self.session_opts = session_opts
 
