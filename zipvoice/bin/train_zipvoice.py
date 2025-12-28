@@ -621,6 +621,20 @@ def train_one_epoch(
                     tb_writer, "train/valid_", params.batch_idx_train
                 )
 
+            # Add wandb logging for validation loss
+            if params.wandb and wandb is not None:
+                wandb_log = {
+                    "valid/epoch": params.cur_epoch,
+                }
+                # Log all validation metrics (normalized by frames)
+                for key, value in valid_info.norm_items():
+                    wandb_log[f"valid/{key}"] = value
+                # Also log raw frames count
+                wandb_log["valid/frames"] = valid_info["frames"]
+                # Log best validation loss
+                wandb_log["valid/best_loss"] = params.best_valid_loss
+                wandb.log(wandb_log, step=params.batch_idx_train)
+
         params.batch_idx_train += 1
 
         batch_size = len(batch["text"])
