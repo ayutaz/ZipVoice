@@ -993,7 +993,40 @@ def run(rank, world_size, args):
 
     if params.checkpoint is not None:
         logging.info(f"Loading pre-trained model from {params.checkpoint}")
-        _ = load_checkpoint(filename=params.checkpoint, model=model, strict=True)
+        # Load checkpoint and handle vocabulary extension for fine-tuning
+        checkpoint = torch.load(params.checkpoint, map_location="cpu", weights_only=False)
+        if "model" in checkpoint:
+            state_dict = checkpoint["model"]
+        else:
+            state_dict = checkpoint
+
+        # Check if vocabulary size changed (for Japanese fine-tuning)
+        if "embed.weight" in state_dict:
+            ckpt_vocab_size = state_dict["embed.weight"].shape[0]
+            model_vocab_size = model.embed.weight.shape[0]
+            if ckpt_vocab_size != model_vocab_size:
+                logging.info(
+                    f"Vocabulary size mismatch: checkpoint={ckpt_vocab_size}, "
+                    f"model={model_vocab_size}. Extending embedding layer."
+                )
+                # Create new embedding with extended vocabulary
+                old_embed = state_dict["embed.weight"]
+                new_embed = model.embed.weight.data.clone()
+                # Copy original embeddings
+                new_embed[:ckpt_vocab_size] = old_embed
+                # Initialize new tokens with small random values (same std as existing embeddings)
+                if model_vocab_size > ckpt_vocab_size:
+                    std = old_embed.std().item()
+                    num_new = model_vocab_size - ckpt_vocab_size
+                    new_embed[ckpt_vocab_size:] = torch.randn(num_new, old_embed.shape[1]) * std * 0.1
+                state_dict["embed.weight"] = new_embed
+
+        # Load with strict=False to handle any other minor mismatches
+        missing, unexpected = model.load_state_dict(state_dict, strict=False)
+        if missing:
+            logging.warning(f"Missing keys: {missing}")
+        if unexpected:
+            logging.warning(f"Unexpected keys: {unexpected}")
     num_param = sum([p.numel() for p in model.parameters()])
     logging.info(f"Number of parameters : {num_param}")
 

@@ -586,7 +586,8 @@ class JapaneseTokenizer(Tokenizer):
                 self.token2id[token] = id
 
         self.pad_id = self.token2id["_"]  # padding
-        self.vocab_size = len(self.token2id)
+        # vocab_size should be max_id + 1 to handle sparse IDs
+        self.vocab_size = max(self.token2id.values()) + 1
         self.has_tokens = True
 
     def texts_to_token_ids(
@@ -910,6 +911,8 @@ def add_tokens(cut_set: CutSet, tokenizer: str, lang: str):
         tokenizer = LibriTTSTokenizer()
     elif tokenizer == "simple":
         tokenizer = SimpleTokenizer()
+    elif tokenizer == "japanese":
+        tokenizer = JapaneseTokenizer()
     else:
         raise ValueError(f"Unsupported tokenizer: {tokenizer}.")
 

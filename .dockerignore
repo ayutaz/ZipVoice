@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.eggs
+*.egg-info
+*.egg
+
+# Virtual environments
+.venv
+venv
+env
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Build
+build
+dist
+
+# Large directories (will be mounted as volumes)
+exp
+data/raw/*.wav
+download
+
+# Temp files
+*.tmp
+*.log
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints

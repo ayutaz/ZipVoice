@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+  zipvoice-train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zipvoice-japanese:latest
+    container_name: zipvoice-japanese-train
+
+    # GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Mount volumes for data persistence
+    volumes:
+      - ./data:/workspace/data
+      - ./download:/workspace/download
+      - ./exp:/workspace/exp
+      - ./egs:/workspace/egs
+
+    # Environment variables
+    environment:
+      - WANDB_API_KEY=${WANDB_API_KEY}
+      - CUDA_VISIBLE_DEVICES=0
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Working directory
+    working_dir: /workspace
+
+    # Default command for training
+    command: >
+      python -m zipvoice.bin.train_zipvoice
+      --world-size 1
+      --use-fp16 1
+      --finetune 1
+      --base-lr 0.0001
+      --num-iters 10000
+      --save-every-n 1000
+      --max-duration 60
+      --drop-last 0
+      --model-config download/zipvoice/model.json
+      --checkpoint download/zipvoice/model.pt
+      --tokenizer japanese
+      --token-file data/tokens_japanese_extended.txt
+      --dataset custom
+      --train-manifest data/fbank/tsukuyomi_cuts_train.jsonl.gz
+      --dev-manifest data/fbank/tsukuyomi_cuts_dev.jsonl.gz
+      --exp-dir exp/zipvoice_japanese
+      --wandb-project zipvoice-japanese
+
+  # Interactive shell for debugging
+  zipvoice-shell:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zipvoice-japanese:latest
+    container_name: zipvoice-japanese-shell
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    volumes:
+      - ./data:/workspace/data
+      - ./download:/workspace/download
+      - ./exp:/workspace/exp
+      - ./egs:/workspace/egs
+      - ./zipvoice:/workspace/zipvoice
+
+    environment:
+      - WANDB_API_KEY=${WANDB_API_KEY}
+      - CUDA_VISIBLE_DEVICES=0
+
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    command: bash
