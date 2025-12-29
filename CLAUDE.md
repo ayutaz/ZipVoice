@@ -69,9 +69,31 @@ uv run python -m zipvoice.bin.train_zipvoice_distill \
 
 ### モデルエクスポート
 ```bash
-uv run python -m zipvoice.bin.onnx_export [args...]
+# 通常のONNXエクスポート
+uv run python -m zipvoice.bin.onnx_export \
+    --model-name zipvoice \
+    --model-dir exp/zipvoice_moe_90h \
+    --checkpoint-name best-valid-loss.pt \
+    --onnx-model-dir exp/zipvoice_onnx
+
+# Unity Sentis互換ONNXエクスポート（Ifオペレーター除去）
+uv run python -m zipvoice.bin.onnx_export \
+    --model-name zipvoice \
+    --model-dir exp/zipvoice_moe_90h \
+    --checkpoint-name best-valid-loss.pt \
+    --onnx-model-dir exp/zipvoice_onnx_unity \
+    --unity-sentis 1 \
+    --fm-seq-len 512
+
+# TensorRTエクスポート
 uv run python -m zipvoice.bin.tensorrt_export [args...]
 ```
+
+**Unity Sentisモードのオプション**:
+- `--unity-sentis 1`: Ifオペレーターを除去（Unity Sentis必須）
+- `--fm-seq-len N`: FM Decoderの固定シーケンス長（デフォルト: 200）
+
+詳細は [docs/unity_sentis_onnx.md](docs/unity_sentis_onnx.md) を参照。
 
 ### コードフォーマット
 ```bash
@@ -120,9 +142,9 @@ runtime/           # 本番デプロイメント（NVIDIA Triton）
 
 **モデル**: `ZipVoice`, `ZipVoiceDistill`, `ZipVoiceDialog`, `ZipVoiceDialogStereo`
 
-**トークナイザ**: `EmiliaTokenizer`(中国語), `LibriTTSTokenizer`(英語), `EspeakTokenizer`(多言語)
+**トークナイザ**: `EmiliaTokenizer`(中国語), `LibriTTSTokenizer`(英語), `EspeakTokenizer`(多言語), `JapaneseTokenizer`(日本語)
 
-**推論バックエンド**: PyTorch / ONNX / TensorRT / Triton
+**推論バックエンド**: PyTorch / ONNX / TensorRT / Triton / Unity Sentis
 
 ## 重要な実装詳細
 

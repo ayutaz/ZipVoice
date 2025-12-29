@@ -88,6 +88,24 @@ def get_parser():
         help="The name of model checkpoint.",
     )
 
+    parser.add_argument(
+        "--fm-seq-len",
+        type=int,
+        default=200,
+        help="Sequence length for FM decoder tracing. When using Unity Sentis "
+        "(skip_pe_script=True), inference must use exactly this sequence length. "
+        "Typical values: 200 (default), 1024 (for longer outputs).",
+    )
+
+    parser.add_argument(
+        "--unity-sentis",
+        type=int,
+        default=0,
+        choices=[0, 1],
+        help="Set to 1 to export for Unity Sentis compatibility (removes If operators). "
+        "Note: This creates fixed-size models that require padding at inference time.",
+    )
+
     return parser
 
 
@@ -270,6 +288,7 @@ def export_fm_decoder(
     model: OnnxFlowMatchingModel,
     filename: str,
     opset_version: int = 13,
+    seq_len: int = 200,
 ) -> None:
     """Export the flow matching decoder model to ONNX format.
 
@@ -280,9 +299,11 @@ def export_fm_decoder(
         The filename to save the exported ONNX model.
       opset_version:
         The opset version to use.
+      seq_len:
+        The sequence length for tracing. When skip_pe_script=True (for Unity Sentis),
+        inference must use exactly this sequence length with padding.
     """
     feat_dim = model.feat_dim
-    seq_len = 200
     t = torch.tensor(0.5, dtype=torch.float32)
     x = torch.randn(1, seq_len, feat_dim, dtype=torch.float32)
     text_condition = torch.randn(1, seq_len, feat_dim, dtype=torch.float32)
@@ -377,7 +398,43 @@ def main():
     model = model.to(device)
     model.eval()
 
-    convert_scaled_to_non_scaled(model, inplace=True, is_onnx=True)
+    # Warmup positional encodings to avoid If operators in ONNX
+    # Unity Sentis does not support the If operator
+    # IMPORTANT: This must be done BEFORE convert_scaled_to_non_scaled
+    # because that function converts modules to TorchScript, after which
+    # replacing extend_pe with a no-op won't affect the scripted code.
+    MAX_SEQ_LEN = 2048
+
+    def warmup_and_disable_extend_pe(module, max_len):
+        """Warmup and disable extend_pe for all CompactRelPositionalEncoding modules.
+
+        This pre-computes positional encodings for a maximum sequence length,
+        then replaces extend_pe() with a no-op function. This ensures that
+        during ONNX tracing, no conditional branches are generated.
+        Unity Sentis does not support the If operator.
+        """
+        for name, child in module.named_modules():
+            if hasattr(child, "extend_pe") and callable(child.extend_pe):
+                # Pre-compute PE with sufficient size
+                child.extend_pe(torch.zeros(max_len))
+                logging.info(
+                    f"Warmed up positional encoding: {name}, "
+                    f"PE shape: {child.pe.shape}"
+                )
+                # Replace extend_pe with a no-op to avoid If during tracing
+                child.extend_pe = lambda *args, **kwargs: None
+
+    unity_sentis = params.unity_sentis == 1
+
+    if unity_sentis:
+        warmup_and_disable_extend_pe(model, MAX_SEQ_LEN)
+        logging.info(f"Positional encodings warmed up and disabled for max_seq_len={MAX_SEQ_LEN}")
+        logging.info("Unity Sentis mode: If operators will be removed")
+
+    # skip_pe_script=True avoids scripting CompactRelPositionalEncoding modules
+    # which would reintroduce 'If' operators. The warmup above ensures PE is
+    # pre-computed, and lambda replacement ensures extend_pe is a no-op during tracing.
+    convert_scaled_to_non_scaled(model, inplace=True, is_onnx=True, skip_pe_script=unity_sentis)
 
     logging.info("Exporting model")
     onnx_model_dir = Path(params.onnx_model_dir)
@@ -398,7 +455,12 @@ def main():
         model=fm_decoder,
         filename=fm_decoder_file,
         opset_version=opset_version,
+        seq_len=params.fm_seq_len,
     )
+
+    if unity_sentis:
+        logging.info(f"Unity Sentis mode: FM decoder exported with fixed seq_len={params.fm_seq_len}")
+        logging.info("Note: Inference must use exactly this sequence length with padding")
 
     logging.info("Generate int8 quantization models")
 

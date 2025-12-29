@@ -63,6 +63,7 @@ def convert_scaled_to_non_scaled(
     inplace: bool = False,
     is_pnnx: bool = False,
     is_onnx: bool = False,
+    skip_pe_script: bool = False,
 ):
     """
     Args:
@@ -75,6 +76,10 @@ def convert_scaled_to_non_scaled(
         True if we are going to export the model for PNNX.
       is_onnx:
         True if we are going to export the model for ONNX.
+      skip_pe_script:
+        If True, skip scripting CompactRelPositionalEncoding modules.
+        Use this when you want to avoid 'If' operators in ONNX for
+        Unity Sentis compatibility.
     Return:
       Return a model without scaled layers.
     """
@@ -89,10 +94,11 @@ def convert_scaled_to_non_scaled(
             d[name] = SwooshROnnx()
         elif is_onnx and isinstance(m, SwooshL):
             d[name] = SwooshLOnnx()
-        elif is_onnx and isinstance(m, CompactRelPositionalEncoding):
+        elif is_onnx and isinstance(m, CompactRelPositionalEncoding) and not skip_pe_script:
             # We want to recreate the positional encoding vector when
             # the input changes, so we have to use torch.jit.script()
             # to replace torch.jit.trace()
+            # Note: skip_pe_script=True avoids 'If' operators for Unity Sentis
             d[name] = torch.jit.script(m)
 
     for k, v in d.items():
