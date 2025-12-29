@@ -86,6 +86,7 @@ services:
       - ./exp:/workspace/exp
       - ./egs:/workspace/egs
       - ./zipvoice:/workspace/zipvoice
+      - ./scripts:/workspace/scripts
 
     environment:
       - WANDB_API_KEY=${WANDB_API_KEY}

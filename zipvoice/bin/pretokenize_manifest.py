@@ -31,22 +31,22 @@ from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 
 
-def tokenize_chunk(args: Tuple[List[str], str]) -> List[str]:
+def tokenize_chunk(args: Tuple[List[str], str, bool]) -> List[str]:
     """Worker function to tokenize a chunk of cuts.
 
     Each worker process initializes its own JapaneseTokenizer instance.
 
     Args:
-        args: Tuple of (chunk of cut JSON strings, token file path)
+        args: Tuple of (chunk of cut JSON strings, token file path, use_accent flag)
 
     Returns:
         List of tokenized cut JSON strings
     """
-    chunk, token_file = args
+    chunk, token_file, use_accent = args
 
     # Import and initialize tokenizer in worker process
     from zipvoice.tokenizer.tokenizer import JapaneseTokenizer
-    tokenizer = JapaneseTokenizer(token_file)
+    tokenizer = JapaneseTokenizer(token_file, use_accent=use_accent)
 
     results = []
     for cut_json in chunk:
@@ -84,6 +84,8 @@ def main():
                         help="Number of worker processes (default: 70%% of CPU cores)")
     parser.add_argument("--chunk-size", type=int, default=500,
                         help="Number of samples per chunk (default: 500)")
+    parser.add_argument("--use-accent", action="store_true",
+                        help="Use accent markers ([H], [L], |, [Q]) in tokenization")
     args = parser.parse_args()
 
     input_path = Path(args.input_manifest)
@@ -96,6 +98,7 @@ def main():
         num_workers = max(1, args.num_workers)
 
     logging.info(f"Using {num_workers} worker processes with chunk size {args.chunk_size}")
+    logging.info(f"Use accent markers: {args.use_accent}")
 
     # Read all cuts
     logging.info(f"Reading manifest from {input_path}...")
@@ -113,8 +116,8 @@ def main():
     # Tokenize with multiprocessing
     logging.info("Tokenizing with multiprocessing...")
 
-    # Prepare arguments for workers (chunk, token_file)
-    chunk_args = [(chunk, args.token_file) for chunk in chunks]
+    # Prepare arguments for workers (chunk, token_file, use_accent)
+    chunk_args = [(chunk, args.token_file, args.use_accent) for chunk in chunks]
 
     # Use spawn context for compatibility with Docker/Linux
     ctx = mp.get_context('spawn')
