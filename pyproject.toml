@@ -50,3 +50,8 @@ profile = "black"
 
 [tool.black]
 line-length = 88
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
