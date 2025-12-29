@@ -8,6 +8,9 @@ services:
     image: zipvoice-japanese:latest
     container_name: zipvoice-japanese-train
 
+    # Increase shared memory for PyTorch DataLoader workers
+    shm_size: '16gb'
+
     # GPU support
     deploy:
       resources:
@@ -36,27 +39,27 @@ services:
     # Working directory
     working_dir: /workspace
 
-    # Default command for training
-    # Using python directly since packages are installed via uv sync in Dockerfile
+    # Japanese continual pretraining with moe-speech 90h dataset
+    # Resume training from epoch 15 checkpoint
     command: >
       python -m zipvoice.bin.train_zipvoice
       --world-size 1
       --use-fp16 1
-      --finetune 1
-      --base-lr 0.0001
-      --num-iters 10000
-      --save-every-n 1000
-      --max-duration 60
-      --drop-last 0
+      --start-epoch 16
+      --base-lr 0.005
+      --num-iters 50000
+      --save-every-n 5000
+      --max-duration 220
+      --lr-hours 3800
+      --max-len 20
       --model-config download/zipvoice/model.json
-      --checkpoint download/zipvoice/model.pt
       --tokenizer japanese
       --token-file data/tokens_japanese_extended.txt
       --dataset custom
-      --train-manifest data/fbank/tsukuyomi_cuts_train.jsonl.gz
-      --dev-manifest data/fbank/tsukuyomi_cuts_dev.jsonl.gz
-      --exp-dir exp/zipvoice_japanese
-      --wandb-project zipvoice-japanese
+      --train-manifest data/fbank/moe_speech_cuts_train_tokenized.jsonl.gz
+      --dev-manifest data/fbank/moe_speech_cuts_dev_tokenized.jsonl.gz
+      --exp-dir exp/zipvoice_moe_90h
+      --wandb-project zipvoice
 
   # Interactive shell for debugging
   zipvoice-shell:
@@ -65,6 +68,9 @@ services:
       dockerfile: Dockerfile
     image: zipvoice-japanese:latest
     container_name: zipvoice-japanese-shell
+
+    # Increase shared memory for PyTorch DataLoader workers
+    shm_size: '16gb'
 
     deploy:
       resources:
