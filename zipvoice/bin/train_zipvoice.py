@@ -622,7 +622,7 @@ def train_one_epoch(
                 )
 
             # Add wandb logging for validation loss
-            if params.wandb and wandb is not None:
+            if use_wandb and wandb is not None:
                 wandb_log = {
                     "valid/epoch": params.cur_epoch,
                 }

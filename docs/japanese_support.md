@@ -535,6 +535,98 @@ uv run python scripts/convert_paths.py
 
 ## 訓練結果例
 
+### moe-speech-20speakers-ljspeech（90.6時間、60,233発話）
+
+2025年12月実施の継続事前学習実験。
+
+#### データセット情報
+
+| 項目 | 値 |
+|------|-----|
+| データセット | [moe-speech-20speakers-ljspeech](https://huggingface.co/datasets/litagin/moe-speech-20speakers-ljspeech) |
+| 総発話数 | 60,233 |
+| 総時間 | 90.6時間 |
+| 話者数 | 20名 |
+| Train/Dev分割 | 54,209 / 6,024 (90%/10%) |
+| サンプルレート | 24kHz（44.1kHzからリサンプリング） |
+
+#### 訓練設定
+
+```bash
+python -m zipvoice.bin.train_zipvoice \
+    --world-size 1 \
+    --use-fp16 1 \
+    --finetune 1 \
+    --checkpoint download/zipvoice/model.pt \
+    --base-lr 0.005 \
+    --num-iters 50000 \
+    --save-every-n 5000 \
+    --max-duration 220 \
+    --lr-hours 3800 \
+    --model-config download/zipvoice/model.json \
+    --tokenizer japanese \
+    --token-file data/tokens_japanese_extended.txt \
+    --dataset custom \
+    --train-manifest data/fbank/moe_speech_cuts_train_tokenized.jsonl.gz \
+    --dev-manifest data/fbank/moe_speech_cuts_dev_tokenized.jsonl.gz \
+    --exp-dir exp/zipvoice_moe_90h \
+    --wandb-project zipvoice
+```
+
+#### 訓練進捗（2025-12-29時点）
+
+| 指標 | 値 |
+|------|-----|
+| Epoch | 16 |
+| Iteration | 21,550 / 50,000 (43%) |
+| Training Loss | ~0.07（安定） |
+| Validation Loss | 0.0727 → 0.0598 → 0.0595 → 0.0582（順調に減少） |
+| 推定残り時間 | 10-12時間 |
+| GPU | RTX 4090 |
+| 処理速度 | ~46 iter/min |
+
+#### トークンファイル
+
+日本語専用トークン（ID 360-384）を追加した拡張トークンファイルを使用:
+
+```
+# data/tokens_japanese_extended.txt
+# 360-384: 日本語専用トークン
+A       360  # 無声母音
+E       361
+I       362
+N       363  # 撥音
+O       364
+U       365
+by      366  # 拗音
+ch      367
+cl      368  # 促音
+...
+sil     382
+ts      383
+ty      384
+```
+
+#### 既知の問題
+
+1. **日本語専用トークンの発音が不安定**
+   - 原因: 新規追加トークン（ID 360-384）の埋め込みがランダム初期化
+   - 症状: 「明日」(ashita)が「いやした」のように聞こえる
+   - 対策: 学習継続により改善予定（現在43%完了）
+
+2. **wandb validation lossログのバグ（修正済み）**
+   - 原因: `train_zipvoice.py:625`で`params.wandb`（存在しない）を参照
+   - 修正: `use_wandb`に変更
+
+#### 中間評価（Epoch 15チェックポイント）
+
+| 評価項目 | 結果 |
+|---------|------|
+| 日本語発音 | 一部不安定（新規トークンの学習不足） |
+| 音声クローニング | プロンプト音声の特徴を捉えている |
+| 共有トークン（a, t, n等） | 正常に発音 |
+| 日本語専用トークン（sh, ch, I等） | 改善が必要 |
+
 ### つくよみちゃんコーパス（100文、約30分）
 
 | 指標 | 値 |
