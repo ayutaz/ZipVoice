@@ -549,16 +549,27 @@ class JapaneseTokenizer(Tokenizer):
 
     Supports Japanese-English mixed text by automatically detecting
     and processing each language segment appropriately.
+
+    Args:
+        token_file: Path to the token file with '{token}\\t{token_id}' per line.
+        use_accent: If True, include accent markers ([H], [L], |, [Q]) in output.
     """
 
     # Pre-compiled regex patterns for performance
     _PART_PATTERN = re.compile(r"[<[].*?[>\]]|.")
     _SPLIT_PATTERN = re.compile(r"([<[].*?[>\]])")
 
-    def __init__(self, token_file: Optional[str] = None):
+    # Accent markers
+    ACCENT_HIGH = "[H]"  # High pitch region (before accent nucleus)
+    ACCENT_LOW = "[L]"   # Low pitch region (at/after accent nucleus)
+    PHRASE_BOUNDARY = "|"  # Accent phrase boundary
+    QUESTION_MARKER = "[Q]"  # Question intonation marker
+
+    def __init__(self, token_file: Optional[str] = None, use_accent: bool = False):
         """
         Args:
             token_file: Path to the token file with '{token}\\t{token_id}' per line.
+            use_accent: If True, include accent markers in output.
         """
         if pyopenjtalk is None:
             raise RuntimeError(
@@ -566,6 +577,7 @@ class JapaneseTokenizer(Tokenizer):
                 "pip install pyopenjtalk-plus"
             )
 
+        self.use_accent = use_accent
         self.japanese_normalizer = JapaneseTextNormalizer()
         self.english_normalizer = EnglishTextNormalizer()
 
@@ -654,18 +666,95 @@ class JapaneseTokenizer(Tokenizer):
             text: Japanese text to convert.
 
         Returns:
-            List of phoneme tokens.
+            List of phoneme tokens. If use_accent is True, includes accent markers.
         """
         try:
+            original_text = text
             text = self.japanese_normalizer.normalize(text)
-            # pyopenjtalk.g2p returns space-separated phonemes
-            phonemes_str = pyopenjtalk.g2p(text)
-            # Split by space to get individual phonemes
-            phonemes = phonemes_str.split()
-            return phonemes
+
+            if self.use_accent:
+                return self._tokenize_JA_with_accent(text, original_text)
+            else:
+                # pyopenjtalk.g2p returns space-separated phonemes
+                phonemes_str = pyopenjtalk.g2p(text)
+                # Split by space to get individual phonemes
+                phonemes = phonemes_str.split()
+                return phonemes
         except Exception as ex:
             logging.warning(f"Tokenization of Japanese texts failed: {ex}")
             return []
+
+    def _tokenize_JA_with_accent(self, text: str, original_text: str) -> List[str]:
+        """Convert Japanese text to phonemes with accent markers.
+
+        Uses pyopenjtalk full context labels to extract:
+        - [H]: High pitch region (before accent nucleus)
+        - [L]: Low pitch region (at/after accent nucleus)
+        - |: Accent phrase boundary
+        - [Q]: Question marker (for sentences ending with ?)
+
+        Args:
+            text: Normalized Japanese text.
+            original_text: Original text (for question detection).
+
+        Returns:
+            List of phoneme tokens with accent markers.
+        """
+        labels = pyopenjtalk.extract_fullcontext(text)
+
+        result = []
+        prev_level = None
+        prev_f = None
+
+        for label in labels:
+            parts = label.split("/")
+            phone_part = parts[0]
+            phone = phone_part.split("-")[1].split("+")[0]
+
+            # Skip silence markers
+            if phone == "sil":
+                continue
+
+            # Handle pause
+            if phone == "pau":
+                result.append("pau")
+                prev_f = None
+                prev_level = None
+                continue
+
+            # Get accent phrase info (F field)
+            f_field = next((p for p in parts if p.startswith("F:")), "F:xx_xx")
+            f_values = f_field[2:].split("#")[0]
+
+            # Accent phrase boundary
+            if prev_f is not None and f_values != prev_f:
+                result.append(self.PHRASE_BOUNDARY)
+                prev_level = None
+
+            # Get accent info (A field)
+            a_field = next((p for p in parts if p.startswith("A:")), "A:xx+xx+xx")
+            a1 = a_field.split("+")[0][2:]
+
+            # Determine pitch level
+            try:
+                a1_val = int(a1)
+                level = "H" if a1_val < 0 else "L"
+            except ValueError:
+                level = "L"  # Default to low for unknown
+
+            # Add pitch marker if level changed
+            if prev_level != level:
+                result.append(self.ACCENT_HIGH if level == "H" else self.ACCENT_LOW)
+
+            result.append(phone)
+            prev_level = level
+            prev_f = f_values
+
+        # Add question marker if text ends with ?
+        if original_text.rstrip().endswith("?") or original_text.rstrip().endswith("？"):
+            result.append(self.QUESTION_MARKER)
+
+        return result
 
     def tokenize_EN(self, text: str) -> List[str]:
         """Convert English text to phonemes using espeak.
