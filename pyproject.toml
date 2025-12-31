@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "cn2an>=0.5.23",
+    "flow2gan",
     "huggingface-hub>=1.2.3",
     "inflect>=7.5.0",
     "jieba>=0.42.1",
@@ -30,6 +31,7 @@ explicit = true
 [tool.uv.sources]
 torch = { index = "pytorch-cu124" }
 torchaudio = { index = "pytorch-cu124" }
+flow2gan = { path = "../Flow2GAN", editable = true }
 
 [tool.uv]
 find-links = ["https://k2-fsa.github.io/icefall/piper_phonemize.html"]

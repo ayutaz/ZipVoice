@@ -250,6 +250,33 @@ wheels = [
 ]
 
 [[package]]
+name = "flow2gan"
+version = "0.1.0"
+source = { editable = "../Flow2GAN" }
+dependencies = [
+    { name = "einops" },
+    { name = "huggingface-hub" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "soundfile" },
+    { name = "torch" },
+    { name = "torchaudio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "einops" },
+    { name = "huggingface-hub" },
+    { name = "lhotse", marker = "extra == 'train'" },
+    { name = "librosa", marker = "extra == 'train'" },
+    { name = "numpy" },
+    { name = "soundfile" },
+    { name = "torch" },
+    { name = "torchaudio" },
+]
+provides-extras = ["train"]
+
+[[package]]
 name = "fsspec"
 version = "2025.12.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1274,6 +1301,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "cn2an" },
+    { name = "flow2gan" },
     { name = "huggingface-hub" },
     { name = "inflect" },
     { name = "jieba" },
@@ -1292,6 +1320,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "cn2an", specifier = ">=0.5.23" },
+    { name = "flow2gan", editable = "../Flow2GAN" },
     { name = "huggingface-hub", specifier = ">=1.2.3" },
     { name = "inflect", specifier = ">=7.5.0" },
     { name = "jieba", specifier = ">=0.42.1" },
