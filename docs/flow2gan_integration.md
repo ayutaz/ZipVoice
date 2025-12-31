@@ -1,159 +1,159 @@
-# Flow2GAN Vocoder Integration
+# Flow2GAN ボコーダー統合
 
-## Overview
+## 概要
 
-This document describes the investigation and integration of Flow2GAN vocoder into ZipVoice as an alternative to the existing Vocos vocoder.
+本ドキュメントでは、ZipVoiceへのFlow2GANボコーダー統合の調査結果と実装内容について説明します。
 
-## Executive Summary
+## 結論
 
-**Conclusion: Flow2GAN does not provide significant benefits over Vocos for ZipVoice.**
+**Flow2GANはVocosと比較して明確なメリットがありません。**
 
-| Aspect | Flow2GAN | Vocos | Winner |
-|--------|----------|-------|--------|
-| Speed | ~0.003s | ~0.003s | Tie |
-| Quality | Good (with fixes) | Good | Tie |
-| Stability | Requires careful configuration | Simple | Vocos |
-| Bottleneck Impact | <5% of total time | <5% of total time | N/A |
+| 観点 | Flow2GAN | Vocos | 結果 |
+|------|----------|-------|------|
+| 速度 | ~0.003秒 | ~0.003秒 | 同等 |
+| 音質 | 良好（修正後） | 良好 | 同等 |
+| 安定性 | 設定に注意が必要 | シンプル | Vocos優位 |
+| ボトルネック影響 | 全体の5%未満 | 全体の5%未満 | N/A |
 
-The vocoder accounts for only 0.2-5% of total inference time. The bottleneck is the ZipVoice model itself (~95%), so vocoder optimization has minimal impact on overall performance.
+ボコーダーは推論時間全体の0.2〜5%程度しか占めていません。ボトルネックはZipVoiceモデル本体（約95%）であり、ボコーダーの最適化は全体性能にほとんど影響しません。
 
-## Background
+## 背景
 
-### Current Vocoder: Vocos
+### 現行ボコーダー: Vocos
 
-ZipVoice uses Vocos (`charactr/vocos-mel-24khz`) to convert mel-spectrograms to waveforms.
+ZipVoiceは現在、Vocos (`charactr/vocos-mel-24khz`) を使用してメルスペクトログラムを波形に変換しています。
 
-### New Vocoder: Flow2GAN
+### 新ボコーダー: Flow2GAN
 
-Flow2GAN is a flow-matching based vocoder with GAN fine-tuning, enabling 1-4 step inference.
+Flow2GANはFlow MatchingとGANファインチューニングを組み合わせたボコーダーで、1〜4ステップでの推論が可能です。
 
-**Key features:**
-- 1-4 step inference (configurable)
-- Flow Matching + GAN fine-tuning
-- Multi-branch ConvNeXt architecture
+**主な特徴:**
+- 1〜4ステップ推論（設定可能）
+- Flow Matching + GANファインチューニング
+- マルチブランチConvNeXtアーキテクチャ
 
-## Compatibility Analysis
+## 互換性分析
 
-Both vocoders share identical mel-spectrogram specifications:
+両ボコーダーは同一のメルスペクトログラム仕様を使用：
 
-| Parameter | ZipVoice | Flow2GAN |
+| パラメータ | ZipVoice | Flow2GAN |
 |-----------|----------|----------|
-| Sampling Rate | 24kHz | 24kHz |
+| サンプリングレート | 24kHz | 24kHz |
 | Mel Bins | 100 | 100 |
 | FFT Size | 1024 | 1024 |
 | Hop Length | 256 | 256 |
 
-No changes needed to the feature extraction pipeline.
+特徴抽出パイプラインの変更は不要です。
 
-## Benchmark Results
+## ベンチマーク結果
 
-### Test Environment
-- GPU: CUDA-enabled device
-- Text: "The quick brown fox jumps over the lazy dog."
-- Prompt: Same reference audio for all tests
+### テスト環境
+- GPU: CUDA対応デバイス
+- テキスト: "The quick brown fox jumps over the lazy dog."
+- プロンプト: 全テストで同一の参照音声を使用
 
-### Speed Comparison
+### 速度比較
 
-| Vocoder | Vocoder Time | Total Time | Vocoder % |
-|---------|--------------|------------|-----------|
-| Vocos | ~0.003s | ~2.8s | 0.1% |
-| Flow2GAN 1-step | ~0.003s | ~2.8s | 0.1% |
-| Flow2GAN 2-step | ~0.003s | ~2.8s | 0.1% |
-| Flow2GAN 4-step | ~0.004s | ~2.8s | 0.1% |
+| ボコーダー | ボコーダー処理時間 | 全体処理時間 | ボコーダー割合 |
+|-----------|------------------|-------------|--------------|
+| Vocos | ~0.003秒 | ~2.8秒 | 0.1% |
+| Flow2GAN 1-step | ~0.003秒 | ~2.8秒 | 0.1% |
+| Flow2GAN 2-step | ~0.003秒 | ~2.8秒 | 0.1% |
+| Flow2GAN 4-step | ~0.004秒 | ~2.8秒 | 0.1% |
 
-**Key Finding:** The vocoder is not the bottleneck. ZipVoice model inference dominates processing time.
+**重要な発見:** ボコーダーはボトルネックではありません。ZipVoiceモデルの推論が処理時間の大部分を占めています。
 
-### Quality Comparison
+### 音質比較
 
-| Vocoder | Audio Quality |
-|---------|---------------|
-| Vocos | Good, stable |
-| Flow2GAN 1-step | Good (after fixes) |
-| Flow2GAN 2-step | Good (after fixes) |
-| Flow2GAN 4-step | Good (after fixes) |
+| ボコーダー | 音質 |
+|-----------|------|
+| Vocos | 良好、安定 |
+| Flow2GAN 1-step | 良好（修正後） |
+| Flow2GAN 2-step | 良好（修正後） |
+| Flow2GAN 4-step | 良好（修正後） |
 
-No significant quality difference between vocoders after applying necessary fixes.
+必要な修正を適用後、ボコーダー間で音質に大きな差はありません。
 
-## Issues Discovered and Fixed
+## 発見した問題と修正
 
-### Issue 1: Model Selection Bug
+### 問題1: モデル選択バグ
 
-**Problem:** Flow2GAN requires step-specific pre-trained models:
-- `libritts-mel-1-step` for 1-step inference
-- `libritts-mel-2-step` for 2-step inference
-- `libritts-mel-4-step` for 4-step inference
+**問題:** Flow2GANはステップ数ごとに専用の事前学習モデルが必要：
+- `libritts-mel-1-step` → 1ステップ推論用
+- `libritts-mel-2-step` → 2ステップ推論用
+- `libritts-mel-4-step` → 4ステップ推論用
 
-Initial implementation used a fixed model regardless of `n_timesteps`, causing audio corruption for 1-step and 2-step.
+初期実装では`n_timesteps`に関係なく固定のモデルを使用していたため、1ステップと2ステップで音声が破損していました。
 
-**Fix:** Auto-select model based on `n_timesteps`:
+**修正:** `n_timesteps`に基づいてモデルを自動選択：
 ```python
 if hf_model_name is None:
     hf_model_name = f"libritts-mel-{n_timesteps}-step"
 ```
 
-### Issue 2: Audio Distortion (Hard Clipping)
+### 問題2: 音割れ（ハードクリッピング）
 
-**Problem:** Audio distortion ("音割れ") in all step configurations.
+**問題:** すべてのステップ設定で音割れが発生。
 
-**Root Cause:** Training-inference mismatch:
-1. During GAN training: `clamp_pred=False` (generator outputs can exceed [-1, 1])
-2. During inference: `clamp_pred=True` causes hard clipping -> distortion
+**根本原因:** 訓練と推論の不一致：
+1. GAN訓練時: `clamp_pred=False`（生成器の出力は[-1, 1]を超える可能性あり）
+2. 推論時: `clamp_pred=True`でハードクリッピング → 音割れ
 
-The discriminator internally normalizes audio (DC removal + peak normalization to 0.8), so the generator learns to produce values outside [-1, 1].
+Discriminatorは内部で音声を正規化（DC除去 + 0.8へのピーク正規化）するため、Generatorは[-1, 1]を超える値を出力するように学習します。
 
-**Fix:** Apply peak normalization matching the discriminator:
+**修正:** Discriminatorと同じピーク正規化を適用：
 ```python
 def decode(self, mel: torch.Tensor) -> torch.Tensor:
     wav = self.model.infer(
         cond=mel,
         n_timesteps=self.n_timesteps,
-        clamp_pred=False,  # Disable hard clipping
+        clamp_pred=False,  # ハードクリッピング無効
     )
-    # Peak normalization (0.8) - matches discriminator training
+    # ピーク正規化 (0.8) - Discriminator訓練時と同じ
     wav = wav - wav.mean(dim=-1, keepdim=True)
     wav = 0.8 * wav / (wav.abs().max(dim=-1, keepdim=True)[0] + 1e-9)
     return wav.unsqueeze(1)
 ```
 
-## Implementation Details
+## 実装詳細
 
-### New Files Created
+### 新規作成ファイル
 
-| File | Description |
-|------|-------------|
-| `zipvoice/vocoder/__init__.py` | Factory function `get_vocoder()` |
-| `zipvoice/vocoder/base.py` | Abstract base class `BaseVocoder` |
-| `zipvoice/vocoder/vocos.py` | Vocos wrapper `VocosVocoder` |
-| `zipvoice/vocoder/flow2gan.py` | Flow2GAN wrapper `Flow2GANVocoder` |
+| ファイル | 説明 |
+|---------|------|
+| `zipvoice/vocoder/__init__.py` | ファクトリ関数 `get_vocoder()` |
+| `zipvoice/vocoder/base.py` | 抽象基底クラス `BaseVocoder` |
+| `zipvoice/vocoder/vocos.py` | Vocosラッパー `VocosVocoder` |
+| `zipvoice/vocoder/flow2gan.py` | Flow2GANラッパー `Flow2GANVocoder` |
 
-### Files Modified
+### 修正ファイル
 
-| File | Changes |
-|------|---------|
-| `zipvoice/bin/infer_zipvoice.py` | Added `--vocoder-type` and `--vocoder-n-steps` arguments |
-| `pyproject.toml` | Added Flow2GAN dependency |
+| ファイル | 変更内容 |
+|---------|---------|
+| `zipvoice/bin/infer_zipvoice.py` | `--vocoder-type`と`--vocoder-n-steps`引数を追加 |
+| `pyproject.toml` | Flow2GAN依存関係を追加 |
 
-### Vocoder Package Structure
+### ボコーダーパッケージ構成
 
 ```
 zipvoice/vocoder/
-    __init__.py     # Factory function get_vocoder()
-    base.py         # BaseVocoder abstract class
-    vocos.py        # VocosVocoder wrapper
-    flow2gan.py     # Flow2GANVocoder wrapper
+    __init__.py     # ファクトリ関数 get_vocoder()
+    base.py         # BaseVocoder抽象クラス
+    vocos.py        # VocosVocoderラッパー
+    flow2gan.py     # Flow2GANVocoderラッパー
 ```
 
-### Interface Design
+### インターフェース設計
 
 ```python
-# Base class
+# 基底クラス
 class BaseVocoder(ABC):
     @abstractmethod
     def decode(self, mel: torch.Tensor) -> torch.Tensor:
         """(B, 100, T) -> (B, 1, samples)"""
         pass
 
-# Factory function
+# ファクトリ関数
 def get_vocoder(vocoder_type: str = "vocos", **kwargs) -> BaseVocoder:
     if vocoder_type == "vocos":
         return VocosVocoder(**kwargs)
@@ -161,51 +161,51 @@ def get_vocoder(vocoder_type: str = "vocos", **kwargs) -> BaseVocoder:
         return Flow2GANVocoder(**kwargs)
 ```
 
-## Usage
+## 使用方法
 
 ```bash
-# Using Vocos (default, recommended)
+# Vocos使用（デフォルト、推奨）
 uv run python -m zipvoice.bin.infer_zipvoice \
     --model-name zipvoice \
     --prompt-wav prompt.wav \
-    --prompt-text "Prompt text" \
-    --text "Text to synthesize" \
+    --prompt-text "プロンプトテキスト" \
+    --text "合成するテキスト" \
     --res-wav-path result.wav
 
-# Using Flow2GAN (2-step)
+# Flow2GAN使用（2ステップ）
 uv run python -m zipvoice.bin.infer_zipvoice \
     --model-name zipvoice \
     --vocoder-type flow2gan \
     --vocoder-n-steps 2 \
     --prompt-wav prompt.wav \
-    --prompt-text "Prompt text" \
-    --text "Text to synthesize" \
+    --prompt-text "プロンプトテキスト" \
+    --text "合成するテキスト" \
     --res-wav-path result.wav
 ```
 
-## Flow2GAN Pre-trained Models
+## Flow2GAN事前学習モデル
 
-| Model Name | Steps | Use Case |
-|------------|-------|----------|
-| `libritts-mel-1-step` | 1 | Ultra-fast |
-| `libritts-mel-2-step` | 2 | Balanced |
-| `libritts-mel-4-step` | 4 | Highest quality |
+| モデル名 | ステップ数 | 用途 |
+|---------|-----------|------|
+| `libritts-mel-1-step` | 1 | 超高速 |
+| `libritts-mel-2-step` | 2 | バランス |
+| `libritts-mel-4-step` | 4 | 最高品質 |
 
-**Important:** Each step count requires its corresponding pre-trained model.
+**重要:** 各ステップ数には対応する事前学習モデルが必要です。
 
-## Recommendations
+## 推奨事項
 
-1. **Use Vocos as default** - Simpler, stable, and equivalent performance
-2. **Keep Flow2GAN as option** - May be useful for future experiments or specific use cases
-3. **Focus optimization efforts on ZipVoice model** - The actual bottleneck (95%+ of inference time)
+1. **Vocosをデフォルトとして使用** - シンプルで安定しており、同等の性能
+2. **Flow2GANはオプションとして保持** - 将来の実験や特定のユースケースで有用な可能性
+3. **最適化の焦点はZipVoiceモデルに** - 実際のボトルネック（推論時間の95%以上）
 
-## Future Considerations
+## 今後の検討事項
 
-- Flow2GAN may be beneficial if future ZipVoice optimizations significantly reduce model inference time
-- Custom training of Flow2GAN on ZipVoice-specific data might improve quality
-- ONNX/TensorRT export of Flow2GAN for deployment scenarios
+- 将来ZipVoiceの最適化によりモデル推論時間が大幅に短縮された場合、Flow2GANが有益になる可能性
+- ZipVoice専用データでのFlow2GANカスタム訓練による品質向上
+- デプロイメントシナリオ向けのFlow2GAN ONNX/TensorRTエクスポート
 
-## References
+## 参考資料
 
-- [Flow2GAN Repository](https://github.com/k2-fsa/Flow2GAN)
+- [Flow2GAN リポジトリ](https://github.com/k2-fsa/Flow2GAN)
 - [Vocos](https://github.com/gemelo-ai/vocos)
