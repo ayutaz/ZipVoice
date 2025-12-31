@@ -74,7 +74,6 @@ import torch
 import torchaudio
 from huggingface_hub import hf_hub_download
 from lhotse.utils import fix_random_seed
-from vocos import Vocos
 
 from zipvoice.models.zipvoice import ZipVoice
 from zipvoice.models.zipvoice_distill import ZipVoiceDistill
@@ -97,6 +96,7 @@ from zipvoice.utils.infer import (
     rms_norm,
 )
 from zipvoice.utils.tensorrt import load_trt
+from zipvoice.vocoder import get_vocoder
 
 HUGGINGFACE_REPO = "k2-fsa/ZipVoice"
 MODEL_DIR = {
@@ -140,6 +140,21 @@ def get_parser():
         default=None,
         help="The vocoder checkpoint. "
         "Will download pre-trained vocoder from huggingface if not specified.",
+    )
+
+    parser.add_argument(
+        "--vocoder-type",
+        type=str,
+        default="vocos",
+        choices=["vocos", "flow2gan"],
+        help="The vocoder type to use for waveform synthesis.",
+    )
+
+    parser.add_argument(
+        "--vocoder-n-steps",
+        type=int,
+        default=2,
+        help="Number of ODE solver steps for Flow2GAN vocoder (1, 2, or 4).",
     )
 
     parser.add_argument(
@@ -296,20 +311,6 @@ def get_parser():
         help="The path to the TensorRT engine file.",
     )
     return parser
-
-
-def get_vocoder(vocos_local_path: Optional[str] = None):
-    if vocos_local_path:
-        vocoder = Vocos.from_hparams(f"{vocos_local_path}/config.yaml")
-        state_dict = torch.load(
-            f"{vocos_local_path}/pytorch_model.bin",
-            weights_only=True,
-            map_location="cpu",
-        )
-        vocoder.load_state_dict(state_dict)
-    else:
-        vocoder = Vocos.from_pretrained("charactr/vocos-mel-24khz")
-    return vocoder
 
 
 def generate_sentence_raw_evaluation(
@@ -829,7 +830,11 @@ def main():
     if params.trt_engine_path:
         load_trt(model, params.trt_engine_path)
 
-    vocoder = get_vocoder(params.vocoder_path)
+    vocoder = get_vocoder(
+        vocoder_type=params.vocoder_type,
+        local_path=params.vocoder_path,
+        n_timesteps=params.vocoder_n_steps,
+    )
     vocoder = vocoder.to(params.device)
     vocoder.eval()
 
