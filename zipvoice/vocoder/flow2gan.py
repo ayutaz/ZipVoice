@@ -23,7 +23,7 @@ class Flow2GANVocoder(BaseVocoder):
         n_timesteps: int = 2,
         clamp_pred: bool = True,
         model_name: str = "mel_24k_base",
-        hf_model_name: str = "libritts-mel-4-step",
+        hf_model_name: Optional[str] = None,
         checkpoint: Optional[str] = None,
     ):
         """
@@ -32,13 +32,23 @@ class Flow2GANVocoder(BaseVocoder):
         Args:
             n_timesteps: Number of ODE solver steps (1, 2, or 4).
                         Lower = faster, higher = better quality.
+                        Each step count requires a corresponding pre-trained model.
             clamp_pred: Whether to clamp output to [-1, 1].
             model_name: Model configuration name.
             hf_model_name: HuggingFace model name for pre-trained weights.
+                          If None, automatically selects based on n_timesteps.
             checkpoint: Optional path to local checkpoint file.
         """
+        if n_timesteps not in (1, 2, 4):
+            raise ValueError(f"n_timesteps must be 1, 2, or 4, got {n_timesteps}")
+
         self.n_timesteps = n_timesteps
         self.clamp_pred = clamp_pred
+
+        # Auto-select model based on n_timesteps if not specified
+        if hf_model_name is None:
+            hf_model_name = f"libritts-mel-{n_timesteps}-step"
+
         self.model, self.config = get_model(
             model_name=model_name,
             hf_model_name=hf_model_name,
