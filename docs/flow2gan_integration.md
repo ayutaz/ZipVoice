@@ -142,6 +142,172 @@ Flow2GANはFlow MatchingとGANファインチューニングを組み合わせ�
 | Vocosロード | ~540 ms |
 | Flow2GANロード | ~1350-1640 ms |
 
+## 統合手順
+
+以下は実際に行ったFlow2GAN統合の手順です。
+
+### Step 1: ブランチ作成
+
+```bash
+git checkout master
+git checkout -b feature/flow2gan-vocoder
+```
+
+### Step 2: Flow2GANリポジトリの準備
+
+Flow2GANをローカルにclone:
+```bash
+git clone https://github.com/k2-fsa/Flow2GAN.git C:\Users\yuta\Desktop\Private\Flow2GAN
+```
+
+Flow2GANには`pyproject.toml`がなかったため、新規作成:
+```toml
+[project]
+name = "flow2gan"
+version = "0.1.0"
+dependencies = [
+    "torch>=2.0",
+    "torchaudio",
+    "huggingface-hub",
+    "safetensors",
+]
+
+[project.optional-dependencies]
+train = [
+    "librosa",
+    "lhotse",
+]
+```
+
+**注意**: `librosa`と`lhotse`はPython 3.11でnumba依存関係の問題があるため、推論に不要なものはオプショナル依存に移動しました。
+
+### Step 3: Flow2GANを依存関係に追加
+
+`uv add`でローカルパスからeditableインストール:
+```bash
+uv add flow2gan --editable "C:\Users\yuta\Desktop\Private\Flow2GAN"
+```
+
+これにより`pyproject.toml`に以下が追加されます:
+```toml
+[tool.uv.sources]
+flow2gan = { path = "C:\\Users\\yuta\\Desktop\\Private\\Flow2GAN", editable = true }
+```
+
+### Step 4: ボコーダーパッケージの作成
+
+`zipvoice/vocoder/`ディレクトリを作成し、統一インターフェースを実装:
+
+#### 4.1 基底クラス (`base.py`)
+```python
+from abc import ABC, abstractmethod
+import torch
+
+class BaseVocoder(ABC):
+    @abstractmethod
+    def decode(self, mel: torch.Tensor) -> torch.Tensor:
+        """(B, 100, T) -> (B, 1, samples)"""
+        pass
+
+    @abstractmethod
+    def to(self, device: torch.device) -> "BaseVocoder":
+        pass
+
+    @abstractmethod
+    def eval(self) -> "BaseVocoder":
+        pass
+```
+
+#### 4.2 Vocosラッパー (`vocos.py`)
+既存のVocosコードをラッパークラスに移行。
+
+#### 4.3 Flow2GANラッパー (`flow2gan.py`)
+```python
+from flow2gan import get_model
+
+class Flow2GANVocoder(BaseVocoder):
+    def __init__(self, n_timesteps: int = 2, ...):
+        if hf_model_name is None:
+            hf_model_name = f"libritts-mel-{n_timesteps}-step"
+        self.model, self.config = get_model(...)
+```
+
+#### 4.4 ファクトリ関数 (`__init__.py`)
+```python
+def get_vocoder(vocoder_type: str = "vocos", **kwargs) -> BaseVocoder:
+    if vocoder_type == "vocos":
+        return VocosVocoder(**kwargs)
+    elif vocoder_type == "flow2gan":
+        return Flow2GANVocoder(**kwargs)
+```
+
+### Step 5: 推論スクリプトの更新
+
+`zipvoice/bin/infer_zipvoice.py`に以下を追加:
+
+```python
+# 新しい引数
+parser.add_argument("--vocoder-type", type=str, default="vocos",
+                    choices=["vocos", "flow2gan"])
+parser.add_argument("--vocoder-n-steps", type=int, default=2)
+
+# ボコーダー初期化を新しいファクトリ関数に変更
+from zipvoice.vocoder import get_vocoder
+vocoder = get_vocoder(
+    vocoder_type=params.vocoder_type,
+    n_timesteps=params.vocoder_n_steps,
+)
+```
+
+### Step 6: テストと問題の発見
+
+#### 6.1 初回テスト
+```bash
+uv run python -m zipvoice.bin.infer_zipvoice \
+    --vocoder-type flow2gan --vocoder-n-steps 2 \
+    --prompt-wav data/prompt.wav --prompt-text "Hello" \
+    --text "The quick brown fox" --res-wav-path result.wav
+```
+
+#### 6.2 発見した問題1: 音声が破損（1-step, 2-step）
+- **原因**: モデルが`libritts-mel-4-step`に固定されていた
+- **修正**: `n_timesteps`に応じてモデルを自動選択
+
+#### 6.3 発見した問題2: 音割れ（全ステップ）
+- **原因**: `clamp_pred=True`によるハードクリッピング
+- **修正**: ピーク正規化を適用（Discriminatorと同じ処理）
+
+### Step 7: ベンチマーク実施
+
+```bash
+# Vocos
+uv run python scripts/benchmark_inference.py --vocoder-type vocos
+
+# Flow2GAN (各ステップ)
+uv run python scripts/benchmark_inference.py --vocoder-type flow2gan --vocoder-n-steps 1
+uv run python scripts/benchmark_inference.py --vocoder-type flow2gan --vocoder-n-steps 2
+uv run python scripts/benchmark_inference.py --vocoder-type flow2gan --vocoder-n-steps 4
+```
+
+### Step 8: コミットとプッシュ
+
+```bash
+git add .
+git commit -m "Add Flow2GAN vocoder integration"
+git push -u origin feature/flow2gan-vocoder
+```
+
+### コミット履歴
+
+| コミット | 内容 |
+|---------|------|
+| `ad2a4ab` | Add Flow2GAN vocoder integration |
+| `6379e3d` | Update infer_zipvoice.py to use vocoder package |
+| `86468cd` | Fix Flow2GAN model selection based on n_timesteps |
+| `fef2297` | Fix audio distortion and update integration documentation |
+| `55af77e` | Update documentation to Japanese |
+| `0feff4f` | Add detailed inference timing benchmarks |
+
 ## 発見した問題と修正
 
 ### 問題1: モデル選択バグ
