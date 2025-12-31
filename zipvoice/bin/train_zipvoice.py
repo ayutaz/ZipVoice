@@ -290,8 +290,16 @@ def get_parser():
         "--valid-by-epoch",
         type=str2bool,
         default=False,
-        help="""Whether to validate after each epoch. If False, will validate 
+        help="""Whether to validate after each epoch. If False, will validate
         after every save_every_n iterations.
+        """,
+    )
+
+    parser.add_argument(
+        "--valid-interval",
+        type=int,
+        default=1000,
+        help="""Validate after this number of batches.
         """,
     )
 
@@ -338,6 +346,13 @@ def get_parser():
         type=float,
         default=0.2,
         help="The drop rate of text condition during training.",
+    )
+
+    parser.add_argument(
+        "--freeze-fm-decoder",
+        type=str2bool,
+        default=False,
+        help="Freeze the FM decoder to preserve speaker similarity during fine-tuning.",
     )
 
     parser.add_argument(
@@ -938,7 +953,7 @@ def run(rank, world_size, args):
     """
     params = get_params()
     params.update(vars(args))
-    params.valid_interval = params.save_every_n
+    params.valid_interval = params.valid_interval if params.valid_interval > 0 else params.save_every_n
     # Set epoch to a large number to ignore it.
     if params.num_iters > 0:
         params.num_epochs = 1000000
@@ -984,7 +999,7 @@ def run(rank, world_size, args):
     if params.tokenizer == "emilia":
         tokenizer = EmiliaTokenizer(token_file=params.token_file)
     elif params.tokenizer == "japanese":
-        tokenizer = JapaneseTokenizer(token_file=params.token_file)
+        tokenizer = JapaneseTokenizer(token_file=params.token_file, use_accent=True)
     elif params.tokenizer == "libritts":
         tokenizer = LibriTTSTokenizer(token_file=params.token_file)
     elif params.tokenizer == "espeak":
@@ -1043,6 +1058,14 @@ def run(rank, world_size, args):
             logging.warning(f"Unexpected keys: {unexpected}")
     num_param = sum([p.numel() for p in model.parameters()])
     logging.info(f"Number of parameters : {num_param}")
+
+    # Freeze FM decoder if requested (to preserve speaker similarity during fine-tuning)
+    if params.freeze_fm_decoder:
+        for param in model.fm_decoder.parameters():
+            param.requires_grad = False
+        frozen_params = sum([p.numel() for p in model.fm_decoder.parameters()])
+        trainable_params = sum([p.numel() for p in model.parameters() if p.requires_grad])
+        logging.info(f"FM decoder is frozen: {frozen_params} params frozen, {trainable_params} params trainable")
 
     model_avg: Optional[nn.Module] = None
     if rank == 0:
