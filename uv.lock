@@ -510,12 +510,14 @@ name = "k2"
 version = "1.24.4.dev20241030+cuda12.4.torch2.5.1"
 source = { registry = "https://k2-fsa.github.io/k2/cuda.html" }
 dependencies = [
-    { name = "graphviz", marker = "sys_platform == 'linux'" },
+    { name = "graphviz" },
     { name = "torch", version = "2.5.1", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux'" },
-    { name = "torch", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "(platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux')" },
+    { name = "torch", version = "2.5.1+cu124", source = { registry = "https://download.pytorch.org/whl/cu124" }, marker = "platform_machine != 'aarch64' or platform_python_implementation != 'CPython' or sys_platform != 'linux'" },
 ]
 wheels = [
     { url = "https://huggingface.co/csukuangfj/k2/resolve/main/ubuntu-cuda/1.24.4.dev20241029/k2-1.24.4.dev20241030+cuda12.4.torch2.5.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { url = "https://huggingface.co/csukuangfj/k2/resolve/main/ubuntu-cuda/1.24.4.dev20241029/k2-1.24.4.dev20241030+cuda12.4.torch2.5.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
+    { url = "https://huggingface.co/csukuangfj/k2/resolve/main/ubuntu-cuda/1.24.4.dev20241029/k2-1.24.4.dev20241030+cuda12.4.torch2.5.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
     { url = "https://huggingface.co/csukuangfj/k2/resolve/main/ubuntu-cuda/1.24.4.dev20241029/k2-1.24.4.dev20241030+cuda12.4.torch2.5.1-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl" },
 ]
 
@@ -1797,6 +1799,7 @@ dependencies = [
     { name = "inflect" },
     { name = "jaconv" },
     { name = "jieba" },
+    { name = "k2" },
     { name = "lhotse" },
     { name = "librosa" },
     { name = "numpy" },
@@ -1827,10 +1830,11 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cn2an", specifier = ">=0.5.23" },
-    { name = "huggingface-hub", specifier = ">=1.2.3" },
+    { name = "huggingface-hub", extras = ["cli"], specifier = ">=1.2.3" },
     { name = "inflect", specifier = ">=7.5.0" },
     { name = "jaconv", specifier = ">=0.4.1" },
     { name = "jieba", specifier = ">=0.42.1" },
+    { name = "k2", specifier = ">=1.24.4.dev20241030" },
     { name = "k2", marker = "sys_platform == 'linux' and extra == 'cuda'", specifier = "==1.24.4.dev20241030+cuda12.4.torch2.5.1" },
     { name = "lhotse", specifier = ">=1.32.1" },
     { name = "librosa", specifier = ">=0.11.0" },

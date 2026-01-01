@@ -785,7 +785,7 @@ def main():
     if params.tokenizer == "emilia":
         tokenizer = EmiliaTokenizer(token_file=token_file)
     elif params.tokenizer == "japanese":
-        tokenizer = JapaneseTokenizer(token_file=token_file)
+        tokenizer = JapaneseTokenizer(token_file=token_file, use_accent=True)
     elif params.tokenizer == "libritts":
         tokenizer = LibriTTSTokenizer(token_file=token_file)
     elif params.tokenizer == "espeak":

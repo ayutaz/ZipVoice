@@ -565,7 +565,7 @@ class JapaneseTokenizer(Tokenizer):
     PHRASE_BOUNDARY = "|"  # Accent phrase boundary
     QUESTION_MARKER = "[Q]"  # Question intonation marker
 
-    def __init__(self, token_file: Optional[str] = None, use_accent: bool = False):
+    def __init__(self, token_file: Optional[str] = None, use_accent: bool = True):
         """
         Args:
             token_file: Path to the token file with '{token}\\t{token_id}' per line.
