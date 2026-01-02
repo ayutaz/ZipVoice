@@ -182,29 +182,12 @@ ZipVoiceの軽量・高速という利点を維持しながら、日本語に対
 
 ### 学習の経緯と課題
 
-#### 試行1: 通常のファインチューニング（凍結なし）
-```bash
-uv run python -m zipvoice.bin.train_zipvoice \
-    --finetune 1 --checkpoint download/zipvoice/model.pt \
-    --tokenizer japanese --num-iters 50000 ...
-```
-**結果**:
-- 日本語発音・アクセント: 良好
-- ゼロショット話者類似度: 悪い（Catastrophic Forgetting）
+#### 問題の背景
+ZipVoiceをMoeSpeech-20speakers（20話者の日本語データセット）でファインチューニングする際、以下のトレードオフが発生：
+- **日本語アクセント**: FM Decoderを学習させると改善
+- **話者類似度**: FM Decoderを学習させると悪化（Catastrophic Forgetting）
 
-**原因**: オリジナルモデルは数千話者で訓練されていたが、20話者のみでファインチューニングしたためfm_decoderが過適合し、話者汎化能力が失われた。
-
-#### 試行2: FM Decoder完全凍結
-```bash
-uv run python -m zipvoice.bin.train_zipvoice \
-    --finetune 1 --checkpoint download/zipvoice/model.pt \
-    --freeze-fm-decoder 1 --tokenizer japanese --num-iters 30000 ...
-```
-**結果**:
-- 日本語発音・アクセント: 悪い（海外の人が話したような不自然さ）
-- ゼロショット話者類似度: 改善（予想）
-
-**原因**: fm_decoderを完全に凍結したため、日本語のアクセントパターンを学習できなかった。
+オリジナルモデルは数千話者で訓練されており、20話者のみでファインチューニングするとfm_decoderが過適合し、話者汎化能力が失われる。
 
 ### FM Decoder構造分析
 ```
@@ -216,43 +199,132 @@ FM Decoder (118M params, 99.7%)
 └── Stack 4: Zipformer2Encoder (30M) - 後半
 ```
 
-### 今後のアプローチ: 部分凍結
+### 実験結果一覧
 
-**戦略**: 後半スタック（2,3,4）のみ凍結、前半スタック（0,1）は学習可能に
+| 試行 | 設定 | 凍結量 | Val Loss | 日本語アクセント | 話者類似度 |
+|------|------|--------|----------|-----------------|-----------|
+| 1 | 凍結なし | 0% | - | ○ 良い | × 悪い |
+| 2 | FM Decoder完全凍結 | 100% | - | × 悪い | ○ 良い |
+| 3 | Stack 2,3,4凍結 | 72% | 0.0630 | × 悪い | ? |
+| 4 | Stack 4のみ凍結 | 25% | 0.0628 | ? | × 悪い |
 
-| レイヤー | 凍結 | 役割 |
-|---------|------|------|
-| Stack 0, 1 | 学習 | 日本語アクセント・韻律を学習 |
-| Stack 2, 3, 4 | 凍結 | 話者特徴の使い方を保持 |
-
-**実装予定**:
-```python
-# train_zipvoice.pyに追加
-parser.add_argument("--freeze-fm-decoder-stacks", type=str, default="",
-    help="Comma-separated stack indices to freeze (e.g., '2,3,4')")
-
-# 凍結ロジック
-if params.freeze_fm_decoder_stacks:
-    stacks_to_freeze = [int(x) for x in params.freeze_fm_decoder_stacks.split(",")]
-    for i in stacks_to_freeze:
-        for param in model.fm_decoder.encoders[i].parameters():
-            param.requires_grad = False
+#### 試行1: 通常のファインチューニング（凍結なし）
+```bash
+uv run python -m zipvoice.bin.train_zipvoice \
+    --finetune 1 --checkpoint download/zipvoice/model.pt \
+    --tokenizer japanese --num-iters 50000 \
+    --exp-dir exp/zipvoice_moe_90h
 ```
+**結果**:
+- 日本語発音・アクセント: **良好** - 自然な日本語として聞こえる
+- ゼロショット話者類似度: **悪い** - プロンプト話者の声色が反映されない
 
-**訓練コマンド**:
+**原因**: FM Decoderが20話者に過適合し、話者汎化能力が失われた（Catastrophic Forgetting）
+
+#### 試行2: FM Decoder完全凍結
+```bash
+uv run python -m zipvoice.bin.train_zipvoice \
+    --finetune 1 --checkpoint download/zipvoice/model.pt \
+    --freeze-fm-decoder 1 \
+    --tokenizer japanese --num-iters 30000 \
+    --exp-dir exp/zipvoice_japanese_frozen
+```
+**結果**:
+- 日本語発音・アクセント: **悪い** - 海外の人が話したような不自然なアクセント
+- ゼロショット話者類似度: **良い**（推定）
+
+**原因**: FM Decoderを完全に凍結したため、日本語のアクセントパターンを学習できなかった。Text Encoder + Embeddingだけでは日本語の韻律を表現しきれない。
+
+#### 試行3: 部分凍結（Stack 2,3,4凍結）
 ```bash
 uv run python -m zipvoice.bin.train_zipvoice \
     --finetune 1 --checkpoint download/zipvoice/model.pt \
     --freeze-fm-decoder-stacks "2,3,4" \
-    --tokenizer japanese --num-iters 30000 \
-    --base-lr 0.01 ...
+    --tokenizer japanese --num-iters 15000 \
+    --base-lr 0.01 \
+    --exp-dir exp/zipvoice_japanese_partial
+```
+**設定**:
+- 凍結: Stack 2,3,4 (88M params, 72%)
+- 学習可能: Stack 0,1 + embed + text_encoder (34M params, 28%)
+
+**結果**:
+- 日本語発音・アクセント: **悪い** - まだ不自然
+- ゼロショット話者類似度: 未評価
+
+**原因**: 凍結量が多すぎて日本語アクセントを学習できなかった。
+
+#### 試行4: Stack 4のみ凍結
+```bash
+uv run python -m zipvoice.bin.train_zipvoice \
+    --finetune 1 --checkpoint download/zipvoice/model.pt \
+    --freeze-fm-decoder-stacks "4" \
+    --tokenizer japanese --num-iters 15000 \
+    --base-lr 0.01 \
+    --exp-dir exp/zipvoice_japanese_stack4only
+```
+**設定**:
+- 凍結: Stack 4のみ (30M params, 25%)
+- 学習可能: Stack 0,1,2,3 + embed + text_encoder (92M params, 75%)
+
+**結果**:
+- 日本語発音・アクセント: 未評価
+- ゼロショット話者類似度: **悪い** - プロンプト話者の声色が反映されない
+
+**原因**: 凍結量が少なすぎて話者汎化能力が失われた。
+
+### 実装した機能
+
+#### --freeze-fm-decoder オプション
+FM Decoder全体を凍結するオプション。
+```python
+parser.add_argument(
+    "--freeze-fm-decoder",
+    type=str2bool,
+    default=False,
+    help="Freeze the FM decoder to preserve speaker similarity.",
+)
+```
+
+#### --freeze-fm-decoder-stacks オプション
+特定のスタックのみを凍結するオプション。
+```python
+parser.add_argument(
+    "--freeze-fm-decoder-stacks",
+    type=str,
+    default="",
+    help="Comma-separated stack indices to freeze (e.g., '2,3,4'). "
+         "Use this for partial freezing to balance Japanese accent learning and speaker similarity.",
+)
+```
+
+### 結論と今後の方針
+
+**凍結アプローチの限界**:
+凍結量を調整するだけでは、日本語アクセントと話者類似度の両立が困難。
+- 凍結を増やす → 日本語アクセントが悪化
+- 凍結を減らす → 話者類似度が悪化
+
+**次のアプローチ: LoRA（Low-Rank Adaptation）**
+
+LoRAを使用することで、以下が期待できる：
+1. 元のFM Decoderの重みを**完全に保持**（話者類似度維持）
+2. 小さな追加パラメータ（LoRAアダプター）のみ学習（日本語アクセント学習）
+3. 推論時にLoRA重みをマージ可能（追加コストなし）
+
+**実装予定**:
+```python
+# LoRAレイヤーをFM Decoderに追加
+from peft import LoraConfig, get_peft_model
+
+lora_config = LoraConfig(
+    r=16,  # ランク
+    lora_alpha=32,
+    target_modules=["q_proj", "v_proj"],  # 注意機構のみ
+    lora_dropout=0.1,
+)
+model.fm_decoder = get_peft_model(model.fm_decoder, lora_config)
 ```
 
 ### チェックポイント
-- `exp/zipvoice_japanese_frozen/`: FM Decoder完全凍結モデル
-- `exp/zipvoice_japanese_partial/`: 部分凍結モデル（予定）
-
-### 代替案（部分凍結で不十分な場合）
-1. **LoRA実装**: fm_decoderにLoRAアダプターを追加
-2. **混合データ訓練**: 英語/中国語データと混ぜて訓練（話者数を増やす）
-3. **段階的解凍**: 凍結→低学習率で解凍して追加訓練
+- `exp/zipvoice_japanese_stack4only/`: Stack 4のみ凍結モデル（現在のベスト Val Loss: 0.0628）

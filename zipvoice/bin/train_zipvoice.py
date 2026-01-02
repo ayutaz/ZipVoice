@@ -356,6 +356,14 @@ def get_parser():
     )
 
     parser.add_argument(
+        "--freeze-fm-decoder-stacks",
+        type=str,
+        default="",
+        help="Comma-separated stack indices to freeze (e.g., '2,3,4'). "
+             "Use this for partial freezing to balance Japanese accent learning and speaker similarity.",
+    )
+
+    parser.add_argument(
         "--dataset",
         type=str,
         default="emilia",
@@ -1066,6 +1074,22 @@ def run(rank, world_size, args):
         frozen_params = sum([p.numel() for p in model.fm_decoder.parameters()])
         trainable_params = sum([p.numel() for p in model.parameters() if p.requires_grad])
         logging.info(f"FM decoder is frozen: {frozen_params} params frozen, {trainable_params} params trainable")
+
+    # Partial freezing: freeze specific FM decoder stacks
+    if params.freeze_fm_decoder_stacks:
+        stacks_to_freeze = [int(x.strip()) for x in params.freeze_fm_decoder_stacks.split(",")]
+        frozen_params = 0
+        for i in stacks_to_freeze:
+            if i < len(model.fm_decoder.encoders):
+                for param in model.fm_decoder.encoders[i].parameters():
+                    param.requires_grad = False
+                stack_params = sum([p.numel() for p in model.fm_decoder.encoders[i].parameters()])
+                frozen_params += stack_params
+                logging.info(f"FM decoder stack {i} frozen: {stack_params} params")
+            else:
+                logging.warning(f"Stack index {i} out of range (max: {len(model.fm_decoder.encoders)-1})")
+        trainable_params = sum([p.numel() for p in model.parameters() if p.requires_grad])
+        logging.info(f"Partial freeze complete: {frozen_params} params frozen, {trainable_params} params trainable")
 
     model_avg: Optional[nn.Module] = None
     if rank == 0:
