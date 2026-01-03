@@ -207,6 +207,7 @@ FM Decoder (118M params, 99.7%)
 | 2 | FM Decoder完全凍結 | 100% | - | × 悪い | ○ 良い |
 | 3 | Stack 2,3,4凍結 | 72% | 0.0630 | × 悪い | ? |
 | 4 | Stack 4のみ凍結 | 25% | 0.0628 | ? | × 悪い |
+| 5 | DoRA (LoRA+重み分解) | 4.66% | 0.0631 | △ 中途半端 | △ 中途半端 |
 
 #### 試行1: 通常のファインチューニング（凍結なし）
 ```bash
@@ -273,6 +274,28 @@ uv run python -m zipvoice.bin.train_zipvoice \
 
 **原因**: 凍結量が少なすぎて話者汎化能力が失われた。
 
+#### 試行5: DoRA（Weight-Decomposed LoRA）
+```bash
+uv run python -m zipvoice.bin.train_zipvoice \
+    --finetune 1 --checkpoint download/zipvoice/model.pt \
+    --use-lora 1 --lora-rank 32 --lora-alpha 64 \
+    --use-dora 1 --lora-dropout 0.05 \
+    --base-lr 0.001 --num-iters 10000 \
+    --tokenizer japanese \
+    --exp-dir exp/zipvoice_japanese_dora
+```
+**設定**:
+- 方式: DoRA (Weight-Decomposed LoRA) - LoRAより高精度
+- ターゲット: FM Decoder Attention layers (`self_attn_weights.in_proj`, `self_attn1`, `self_attn2`)
+- 訓練パラメータ: 5,783,656 / 124,240,932 (4.66%)
+- rank=32, alpha=64, dropout=0.05
+
+**結果**:
+- 日本語発音・アクセント: **中途半端** - 自然でも不自然でもない
+- ゼロショット話者類似度: **中途半端** - プロンプト話者に似ているとは言えない
+
+**原因**: LoRA/DoRAでは十分な表現力がなく、ゼロショット性能と日本語アクセントの両立は困難。
+
 ### 実装した機能
 
 #### --freeze-fm-decoder オプション
@@ -300,31 +323,56 @@ parser.add_argument(
 
 ### 結論と今後の方針
 
-**凍結アプローチの限界**:
-凍結量を調整するだけでは、日本語アクセントと話者類似度の両立が困難。
-- 凍結を増やす → 日本語アクセントが悪化
-- 凍結を減らす → 話者類似度が悪化
+**ゼロショットアプローチの限界**:
+凍結・部分凍結・LoRA/DoRAのいずれの手法でも、ゼロショット話者類似度と日本語アクセントの両立は困難であった。
 
-**次のアプローチ: LoRA（Low-Rank Adaptation）**
+| アプローチ | 日本語アクセント | 話者類似度 |
+|-----------|-----------------|-----------|
+| 凍結なし | ○ | × |
+| 完全凍結 | × | ○ |
+| 部分凍結 | × | × |
+| DoRA | △ | △ |
 
-LoRAを使用することで、以下が期待できる：
-1. 元のFM Decoderの重みを**完全に保持**（話者類似度維持）
-2. 小さな追加パラメータ（LoRAアダプター）のみ学習（日本語アクセント学習）
-3. 推論時にLoRA重みをマージ可能（追加コストなし）
+**方針転換: 話者特化ファインチューニング（2段階）**
 
-**実装予定**:
-```python
-# LoRAレイヤーをFM Decoderに追加
-from peft import LoraConfig, get_peft_model
+ゼロショットを諦め、特定話者への適応を行う2段階アプローチを採用：
 
-lora_config = LoraConfig(
-    r=16,  # ランク
-    lora_alpha=32,
-    target_modules=["q_proj", "v_proj"],  # 注意機構のみ
-    lora_dropout=0.1,
-)
-model.fm_decoder = get_peft_model(model.fm_decoder, lora_config)
+```
+[オリジナルモデル] → [Stage 1: 日本語継続学習] → [Stage 2: 話者特化学習]
+   (中国語/英語)         (MoeSpeech 60K)           (つくよみちゃん 100)
 ```
 
+**Stage 1: 日本語継続事前学習**
+- データ: MoeSpeech 20話者（約60,000サンプル）
+- 目的: 日本語の発音・アクセントパターンを学習
+- 方式: 全パラメータのファインチューニング
+
+**Stage 2: 話者特化ファインチューニング**
+- データ: つくよみちゃん（100サンプル）
+- 目的: 特定話者の声色に適応
+- 方式: LoRA/DoRAで日本語能力を保持しつつ話者適応
+
+### 実装済み機能
+
+#### LoRA/DoRAサポート
+`zipvoice/models/modules/lora_utils.py` を新規作成：
+```python
+from zipvoice.models.modules.lora_utils import (
+    create_lora_config,
+    apply_lora_to_fm_decoder,
+    merge_lora_weights,
+    save_lora_weights,
+    load_lora_weights,
+)
+```
+
+訓練スクリプトのLoRAオプション:
+- `--use-lora`: LoRA有効化
+- `--lora-rank`: ランク（デフォルト32）
+- `--lora-alpha`: スケーリング係数（デフォルト64）
+- `--use-dora`: DoRA有効化（デフォルトTrue）
+- `--lora-dropout`: ドロップアウト率（デフォルト0.05）
+
 ### チェックポイント
-- `exp/zipvoice_japanese_stack4only/`: Stack 4のみ凍結モデル（現在のベスト Val Loss: 0.0628）
+- `exp/zipvoice_japanese_dora/`: DoRAモデル（Val Loss: 0.0631）
+- `exp/zipvoice_japanese_stack4only/`: Stack 4のみ凍結モデル（Val Loss: 0.0628）

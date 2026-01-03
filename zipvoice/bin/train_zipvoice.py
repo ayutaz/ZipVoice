@@ -363,6 +363,49 @@ def get_parser():
              "Use this for partial freezing to balance Japanese accent learning and speaker similarity.",
     )
 
+    # LoRA/DoRA arguments
+    parser.add_argument(
+        "--use-lora",
+        type=str2bool,
+        default=False,
+        help="Use LoRA for fine-tuning. Preserves base model weights while adding trainable low-rank adapters.",
+    )
+
+    parser.add_argument(
+        "--lora-rank",
+        type=int,
+        default=32,
+        help="LoRA rank. Higher values (32+) are recommended for style/accent learning.",
+    )
+
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=64,
+        help="LoRA alpha (scaling factor). Typically 2x rank.",
+    )
+
+    parser.add_argument(
+        "--use-dora",
+        type=str2bool,
+        default=True,
+        help="Use DoRA (Weight-Decomposed LoRA) for better performance (+3.7-4.4pt over LoRA).",
+    )
+
+    parser.add_argument(
+        "--lora-dropout",
+        type=float,
+        default=0.05,
+        help="LoRA dropout rate.",
+    )
+
+    parser.add_argument(
+        "--lora-target-modules",
+        type=str,
+        default="",
+        help="Comma-separated list of target modules for LoRA. Empty for default attention layers.",
+    )
+
     parser.add_argument(
         "--dataset",
         type=str,
@@ -1090,6 +1133,41 @@ def run(rank, world_size, args):
                 logging.warning(f"Stack index {i} out of range (max: {len(model.fm_decoder.encoders)-1})")
         trainable_params = sum([p.numel() for p in model.parameters() if p.requires_grad])
         logging.info(f"Partial freeze complete: {frozen_params} params frozen, {trainable_params} params trainable")
+
+    # Apply LoRA/DoRA to FM decoder
+    if params.use_lora:
+        from zipvoice.models.modules.lora_utils import (
+            apply_lora_to_fm_decoder,
+            create_lora_config,
+            get_lora_trainable_params,
+        )
+
+        # Parse target modules if provided
+        if params.lora_target_modules:
+            target_modules = [x.strip() for x in params.lora_target_modules.split(",")]
+        else:
+            target_modules = None  # Use default
+
+        # Create LoRA configuration
+        lora_config = create_lora_config(
+            rank=params.lora_rank,
+            alpha=params.lora_alpha,
+            dropout=params.lora_dropout,
+            use_dora=params.use_dora,
+            target_modules=target_modules,
+        )
+
+        # Apply LoRA to FM decoder
+        model = apply_lora_to_fm_decoder(model, lora_config)
+
+        # Log parameter statistics
+        stats = get_lora_trainable_params(model)
+        logging.info(
+            f"LoRA applied: {stats['trainable_params']:,} trainable / {stats['total_params']:,} total "
+            f"({stats['trainable_percent']:.2f}%)"
+        )
+        if params.use_dora:
+            logging.info("DoRA (Weight-Decomposed LoRA) is enabled")
 
     model_avg: Optional[nn.Module] = None
     if rank == 0:
