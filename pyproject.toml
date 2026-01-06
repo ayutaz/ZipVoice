@@ -11,6 +11,8 @@ dependencies = [
     "jieba>=0.42.1",
     "lhotse>=1.32.1",
     "numpy>=1.26.0",
+    "onnx>=1.20.0",
+    "onnxruntime>=1.23.2",
     "pydub>=0.25.1",
     "pypinyin>=0.55.0",
     "safetensors>=0.7.0",
@@ -39,3 +41,20 @@ profile = "black"
 
 [tool.black]
 line-length = 88
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning",
+]
