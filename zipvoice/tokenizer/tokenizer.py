@@ -738,7 +738,7 @@ class JapaneseTokenizer(Tokenizer):
             # Determine pitch level
             try:
                 a1_val = int(a1)
-                level = "H" if a1_val < 0 else "L"
+                level = "H" if a1_val <= 0 else "L"
             except ValueError:
                 level = "L"  # Default to low for unknown
 

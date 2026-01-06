@@ -296,6 +296,43 @@ def get_parser():
         default=None,
         help="The path to the TensorRT engine file.",
     )
+
+    # LoRA/DoRA options
+    parser.add_argument(
+        "--use-lora",
+        type=str2bool,
+        default=False,
+        help="Whether the checkpoint uses LoRA/DoRA.",
+    )
+
+    parser.add_argument(
+        "--lora-rank",
+        type=int,
+        default=128,
+        help="LoRA rank (must match training).",
+    )
+
+    parser.add_argument(
+        "--lora-alpha",
+        type=int,
+        default=256,
+        help="LoRA alpha (must match training).",
+    )
+
+    parser.add_argument(
+        "--use-dora",
+        type=str2bool,
+        default=True,
+        help="Whether to use DoRA (must match training).",
+    )
+
+    parser.add_argument(
+        "--lora-dropout",
+        type=float,
+        default=0.0,
+        help="LoRA dropout (set to 0 for inference).",
+    )
+
     return parser
 
 
@@ -811,12 +848,33 @@ def main():
             **tokenizer_config,
         )
 
+    # Apply LoRA/DoRA if specified
+    if params.use_lora:
+        from zipvoice.models.modules.lora_utils import (
+            create_lora_config,
+            apply_lora_to_fm_decoder,
+        )
+        lora_config = create_lora_config(
+            rank=params.lora_rank,
+            alpha=params.lora_alpha,
+            dropout=params.lora_dropout,
+            use_dora=params.use_dora,
+        )
+        model = apply_lora_to_fm_decoder(model, lora_config)
+        logging.info(f"Applied LoRA/DoRA (rank={params.lora_rank}, alpha={params.lora_alpha}, dora={params.use_dora})")
+
     if str(model_ckpt).endswith(".safetensors"):
         safetensors.torch.load_model(model, model_ckpt)
     elif str(model_ckpt).endswith(".pt"):
         load_checkpoint(filename=model_ckpt, model=model, strict=True)
     else:
         raise NotImplementedError(f"Unsupported model checkpoint format: {model_ckpt}")
+
+    # Merge LoRA weights for faster inference
+    if params.use_lora:
+        logging.info("Merging LoRA weights...")
+        model.fm_decoder = model.fm_decoder.merge_and_unload()
+        logging.info("LoRA weights merged")
 
     if torch.cuda.is_available():
         params.device = torch.device("cuda", 0)

@@ -1071,17 +1071,17 @@ def run(rank, world_size, args):
         **tokenizer_config,
     )
 
-    if params.checkpoint is not None:
-        logging.info(f"Loading pre-trained model from {params.checkpoint}")
-        # Load checkpoint and handle vocabulary extension for fine-tuning
-        checkpoint = torch.load(params.checkpoint, map_location="cpu", weights_only=False)
+    # Helper function to load checkpoint (may be called before or after LoRA application)
+    def load_pretrained_checkpoint(model, checkpoint_path, handle_vocab_extension=True):
+        logging.info(f"Loading pre-trained model from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         if "model" in checkpoint:
             state_dict = checkpoint["model"]
         else:
             state_dict = checkpoint
 
         # Check if vocabulary size changed (for Japanese fine-tuning)
-        if "embed.weight" in state_dict:
+        if handle_vocab_extension and "embed.weight" in state_dict:
             ckpt_vocab_size = state_dict["embed.weight"].shape[0]
             model_vocab_size = model.embed.weight.shape[0]
             if ckpt_vocab_size != model_vocab_size:
@@ -1089,24 +1089,36 @@ def run(rank, world_size, args):
                     f"Vocabulary size mismatch: checkpoint={ckpt_vocab_size}, "
                     f"model={model_vocab_size}. Extending embedding layer."
                 )
-                # Create new embedding with extended vocabulary
                 old_embed = state_dict["embed.weight"]
                 new_embed = model.embed.weight.data.clone()
-                # Copy original embeddings
                 new_embed[:ckpt_vocab_size] = old_embed
-                # Initialize new tokens with small random values (same std as existing embeddings)
                 if model_vocab_size > ckpt_vocab_size:
                     std = old_embed.std().item()
                     num_new = model_vocab_size - ckpt_vocab_size
                     new_embed[ckpt_vocab_size:] = torch.randn(num_new, old_embed.shape[1]) * std * 0.1
                 state_dict["embed.weight"] = new_embed
 
-        # Load with strict=False to handle any other minor mismatches
         missing, unexpected = model.load_state_dict(state_dict, strict=False)
         if missing:
             logging.warning(f"Missing keys: {missing}")
         if unexpected:
             logging.warning(f"Unexpected keys: {unexpected}")
+        return model
+
+    # Check if checkpoint has LoRA format (to decide when to load it)
+    checkpoint_has_lora = False
+    if params.checkpoint is not None:
+        checkpoint_temp = torch.load(params.checkpoint, map_location="cpu", weights_only=False)
+        state_dict_temp = checkpoint_temp.get("model", checkpoint_temp)
+        # Check if any key contains LoRA-specific patterns
+        checkpoint_has_lora = any("base_model.model" in k or "lora_A" in k for k in state_dict_temp.keys())
+        del checkpoint_temp, state_dict_temp
+        if checkpoint_has_lora:
+            logging.info("Checkpoint contains LoRA format - will load after LoRA application")
+
+    # Load checkpoint now if it's NOT LoRA format (or if we're not using LoRA)
+    if params.checkpoint is not None and not (params.use_lora and checkpoint_has_lora):
+        model = load_pretrained_checkpoint(model, params.checkpoint)
     num_param = sum([p.numel() for p in model.parameters()])
     logging.info(f"Number of parameters : {num_param}")
 
@@ -1159,6 +1171,10 @@ def run(rank, world_size, args):
 
         # Apply LoRA to FM decoder
         model = apply_lora_to_fm_decoder(model, lora_config)
+
+        # Load LoRA checkpoint now (after LoRA structure is applied)
+        if params.checkpoint is not None and checkpoint_has_lora:
+            model = load_pretrained_checkpoint(model, params.checkpoint)
 
         # Log parameter statistics
         stats = get_lora_trainable_params(model)

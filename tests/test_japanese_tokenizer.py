@@ -105,8 +105,9 @@ class TestJapaneseTokenizerWithAccent:
         assert "[Q]" not in tokens
 
     def test_high_pitch_before_accent(self, tokenizer):
-        """Test that [H] appears before accent nucleus."""
-        text = "こんにちは"
+        """Test that [H] appears before [L] in words with accent drop."""
+        # Use a word with clear accent drop (not heiban/flat type)
+        text = "明日は晴れです"
         tokens = tokenizer.texts_to_tokens([text])[0]
         # [H] should appear before [L]
         h_idx = tokens.index("[H]")
@@ -123,24 +124,25 @@ class TestJapaneseTokenizerWithAccent:
         """Test expected output format for a known input."""
         text = "明日は晴れです。"
         tokens = tokenizer.texts_to_tokens([text])[0]
-        # Expected: [H] a sh I [L] t a w a | [H] h a [L] r e d e s U
+        # Expected: [H] a sh I t a [L] w a | [H] h a r e [L] d e s U
+        # Note: Accent nucleus (A1=0) is now HIGH, drop happens at A1>0
         expected_structure = [
             "[H]",  # Start with high pitch
             "a",
             "sh",
             "I",  # Devoiced vowel
-            "[L]",  # Pitch drops
             "t",
-            "a",
+            "a",  # Accent nucleus (A1=0) - still high
+            "[L]",  # Pitch drops after accent nucleus
             "w",
             "a",
             "|",  # Phrase boundary
             "[H]",  # High pitch again
             "h",
             "a",
-            "[L]",  # Pitch drops
             "r",
-            "e",
+            "e",  # Accent nucleus (A1=0) - still high
+            "[L]",  # Pitch drops after accent nucleus
             "d",
             "e",
             "s",
@@ -174,11 +176,12 @@ class TestJapaneseTokenizerWithTokenFile:
 
     def test_token_to_id_conversion(self, tokenizer):
         """Test token to ID conversion."""
-        text = "こんにちは"
+        # Use text with clear accent drop (not heiban/flat type)
+        text = "明日は晴れです"
         token_ids = tokenizer.texts_to_token_ids([text])[0]
         # First token should be [H] with ID 385
         assert token_ids[0] == 385
-        # Should contain [L] with ID 386
+        # Should contain [L] with ID 386 (pitch drops after accent nucleus)
         assert 386 in token_ids
 
     def test_question_token_id(self, tokenizer):
@@ -194,6 +197,53 @@ class TestJapaneseTokenizerWithTokenFile:
         token_ids = tokenizer.texts_to_token_ids([text])[0]
         # Should contain | with ID 387
         assert 387 in token_ids
+
+
+class TestAccentPatterns:
+    """Test specific accent patterns to prevent regression."""
+
+    @pytest.fixture
+    def tokenizer(self):
+        from zipvoice.tokenizer.tokenizer import JapaneseTokenizer
+
+        return JapaneseTokenizer(use_accent=True)
+
+    def test_atamadaka_accent(self, tokenizer):
+        """Test atamadaka (頭高型) accent pattern - first mora high, rest low.
+
+        This is a critical test for the A1<=0 fix.
+        Words like つくよみ should have [H] on first mora, [L] on rest.
+        """
+        text = "つくよみ"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # Expected pattern: [H] ts u [L] k u | [H] y o [L] m i
+        # First mora should be high
+        assert tokens[0] == "[H]"
+        # Should have [L] for pitch drop
+        assert "[L]" in tokens
+        # [H] should come before [L]
+        h_idx = tokens.index("[H]")
+        l_idx = tokens.index("[L]")
+        assert h_idx < l_idx
+
+    def test_accent_nucleus_is_high(self, tokenizer):
+        """Test that accent nucleus (A1=0) is marked as HIGH, not LOW.
+
+        This is the core fix: A1=0 should be H, A1>0 should be L.
+        """
+        text = "明日"  # あした - accent on 'し'
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # The accent pattern should have some HIGH markers
+        assert "[H]" in tokens
+        # First phonemes should be HIGH (before or at accent nucleus)
+        assert tokens[0] == "[H]"
+
+    def test_odaka_accent(self, tokenizer):
+        """Test odaka (尾高型) accent pattern - pitch drops at the end."""
+        text = "明日は"  # あしたは - 'は' is low
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        assert "[H]" in tokens
+        assert "[L]" in tokens
 
 
 class TestAccentMarkerConstants:

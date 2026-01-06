@@ -172,13 +172,28 @@ runtime/           # 本番デプロイメント（NVIDIA Triton）
 ZipVoiceの軽量・高速という利点を維持しながら、日本語に対応する。最終的にONNXエクスポートしてUnityで動作させる。
 
 ### データセット
-- **MoeSpeech-20speakers-ljspeech**: 20話者の日本語音声データセット（28GB）
+- **moe-speech-plus**: 473話者の日本語音声データセット（680GB、623時間）- 現在使用中
+- **MoeSpeech-20speakers-ljspeech**: 20話者の日本語音声データセット（28GB）- 過適合のため非推奨
 - **つくよみちゃん**: ゼロショットテスト用（未学習話者）
+
+### 前処理スクリプト
+- `scripts/preprocess_moe_speech_plus.py`: moe-speech-plus用TSV生成スクリプト
+- `scripts/preprocess_moe_speech_plus.sh`: 完全な前処理パイプライン
 
 ### 日本語トークナイザ
 - `pyopenjtalk-plus`を使用
-- アクセントマーカー対応: `[H]`(高), `[L]`(低), `|`(アクセント境界), `[Q]`(促音)
+- アクセントマーカー対応: `[H]`(高), `[L]`(低), `|`(アクセント境界), `[Q]`(疑問文)
 - トークンファイル: `data/tokens_japanese_extended.txt`
+
+#### G2P修正（2026-01-06）
+アクセント核の判定条件を修正：
+```python
+# 旧: a1_val < 0  → 新: a1_val <= 0
+level = "H" if a1_val <= 0 else "L"
+```
+- **変更理由**: アクセント核（A1=0）も高ピッチ領域に含めるべき
+- **効果**: より自然な日本語アクセントパターンの表現
+- **テスト**: 24/24 PASSED（`tests/test_japanese_tokenizer.py`）
 
 ### 学習の経緯と課題
 
@@ -323,7 +338,7 @@ parser.add_argument(
 
 ### 結論と今後の方針
 
-**ゼロショットアプローチの限界**:
+**ゼロショットアプローチの限界（20話者での実験）**:
 凍結・部分凍結・LoRA/DoRAのいずれの手法でも、ゼロショット話者類似度と日本語アクセントの両立は困難であった。
 
 | アプローチ | 日本語アクセント | 話者類似度 |
@@ -333,9 +348,156 @@ parser.add_argument(
 | 部分凍結 | × | × |
 | DoRA | △ | △ |
 
-**方針転換: 話者特化ファインチューニング（2段階）**
+**原因分析**: 20話者では話者の多様性が不足し、FM Decoderが過適合してしまう。
 
-ゼロショットを諦め、特定話者への適応を行う2段階アプローチを採用：
+---
+
+## 試行6: 473話者での大規模訓練（moe-speech-plus）
+
+### 仮説
+20話者での過適合問題は、**話者数の不足**が原因。473話者のmoe-speech-plusで訓練すれば、ゼロショット性能を維持しながら日本語対応が可能になるはず。
+
+### データセット: moe-speech-plus
+
+| 項目 | 値 |
+|------|-----|
+| 話者数 | 473 |
+| サンプル数 | 395,170（Train: 375,412 / Dev: 19,758） |
+| 総時間 | 約623時間 |
+| サイズ | 約680GB |
+| 音声長 | 2〜15秒（平均5.66秒） |
+| サンプルレート | 44.1kHz → 24kHzにリサンプル |
+
+### 前処理パイプライン
+
+```bash
+# 1. TSV生成
+python scripts/preprocess_moe_speech_plus.py \
+  --input-dir /data/moe-speech-plus \
+  --output-dir data/raw \
+  --dev-ratio 0.05
+
+# 2. Manifest作成（24kHzリサンプル含む）
+uv run python -m zipvoice.bin.prepare_dataset \
+  --tsv-path data/raw/moe_speech_plus_train.tsv \
+  --prefix moe_speech_plus --subset train --num-jobs 16 --output-dir data/manifests
+
+# 3. Fbank特徴量計算
+uv run python -m zipvoice.bin.compute_fbank \
+  --source-dir data/manifests --dest-dir data/fbank \
+  --dataset moe_speech_plus --subset train --num-jobs 16
+
+# 4. トークン化
+uv run python -m zipvoice.bin.pretokenize_manifest \
+  --input-manifest data/fbank/moe_speech_plus_cuts_train.jsonl.gz \
+  --output-manifest data/fbank/moe_speech_plus_cuts_train_tokenized.jsonl.gz \
+  --tokenizer japanese --token-file data/tokens_japanese_extended.txt --num-jobs 16
+```
+
+### 訓練コマンド
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python -m zipvoice.bin.train_zipvoice \
+  --world-size 1 \
+  --use-fp16 1 \
+  --num-epochs 20 \
+  --finetune 1 \
+  --checkpoint download/zipvoice/model.pt \
+  --model-config egs/zipvoice/conf/zipvoice_base.json \
+  --tokenizer japanese \
+  --token-file data/tokens_japanese_extended.txt \
+  --dataset custom \
+  --train-manifest data/fbank/moe_speech_plus_cuts_train_tokenized.jsonl.gz \
+  --dev-manifest data/fbank/moe_speech_plus_cuts_dev_tokenized.jsonl.gz \
+  --base-lr 0.01 \
+  --max-duration 100 \
+  --num-workers 4 \
+  --exp-dir exp/zipvoice_japanese_473speakers
+```
+
+### 重要: OOMエラーとmax-durationの関係
+
+#### 問題
+`max_duration`を上げるとOOM（Out of Memory）エラーが発生する。
+
+#### 原因
+`max_duration`は**バッチ内の合計秒数**を制限するが、**メモリ使用量は系列長の二乗に比例**する。
+
+```
+Attention機構のメモリ計算量: O(T² × d)
+- 5秒のサンプル: 469 frames → 0.2M演算
+- 15秒のサンプル: 1406 frames → 2.0M演算（9倍）
+```
+
+DynamicBucketingSamplerは似た長さのサンプルをまとめるため、長いサンプルが集中したバッチでOOMが発生する。
+
+| 同じmax_duration=100でも | バッチサイズ | メモリ係数 |
+|------------------------|------------|----------|
+| 短いサンプル（5秒×20個） | 20 | 500 |
+| 長いサンプル（15秒×6.7個） | 6-7 | 1500（3倍） |
+
+#### 推奨設定（NVIDIA L4 24GB）
+
+| max_duration | 安定性 | 訓練速度 |
+|--------------|-------|---------|
+| 100 | ◎ 安定 | 遅い |
+| 150 | △ 時々OOM | 中程度 |
+| 200+ | × 高確率でOOM | - |
+
+**結論**: NVIDIA L4 24GBでは`max-duration=100`が安全。
+
+#### 代替OOM対策
+
+1. **max_lenを制限**: 長いサンプルを除外（例: `--max-len 10`で10秒以上を除外）
+2. **gradient checkpointing**: メモリ削減（訓練速度20-30%低下）
+3. **勾配累積**: 実効バッチサイズを維持しつつメモリ削減
+
+### 現在の訓練状況（2026-01-06）
+
+**注意**: G2P修正（A1<=0判定）により、旧トークンで訓練されたv1は廃止。新G2Pでv2を開始。
+
+| 項目 | 値 |
+|------|-----|
+| 実験ディレクトリ | `exp/zipvoice_japanese_473speakers_v2/` |
+| 状態 | 新規開始（G2P修正後の再訓練） |
+| 設定 | max-duration=100, base-lr=0.01, FP16 |
+| 推定訓練時間 | 約5.5日（130時間） |
+
+**廃止**: `exp/zipvoice_japanese_473speakers/`（旧G2Pのトークンで訓練、整合性なし）
+
+### 訓練開始/再開コマンド
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python -m zipvoice.bin.train_zipvoice \
+  --world-size 1 \
+  --use-fp16 1 \
+  --num-epochs 20 \
+  --finetune 1 \
+  --checkpoint download/zipvoice/model.pt \
+  --model-config egs/zipvoice/conf/zipvoice_base.json \
+  --tokenizer japanese \
+  --token-file data/tokens_japanese_extended.txt \
+  --dataset custom \
+  --train-manifest data/fbank/moe_speech_plus_cuts_train_tokenized.jsonl.gz \
+  --dev-manifest data/fbank/moe_speech_plus_cuts_dev_tokenized.jsonl.gz \
+  --base-lr 0.01 \
+  --max-duration 100 \
+  --num-workers 4 \
+  --exp-dir exp/zipvoice_japanese_473speakers_v2
+```
+
+**訓練再開時**: `--checkpoint`を最新チェックポイント（例: `exp/zipvoice_japanese_473speakers_v2/checkpoint-5000.pt`）に変更
+
+### 評価予定
+訓練完了後、つくよみちゃん（訓練に含まれない話者）でゼロショット評価を実施。
+
+---
+
+## 過去の方針（参考）
+
+**方針転換案: 話者特化ファインチューニング（2段階）**
+
+ゼロショットを諦め、特定話者への適応を行う2段階アプローチ：
 
 ```
 [オリジナルモデル] → [Stage 1: 日本語継続学習] → [Stage 2: 話者特化学習]
@@ -351,6 +513,8 @@ parser.add_argument(
 - データ: つくよみちゃん（100サンプル）
 - 目的: 特定話者の声色に適応
 - 方式: LoRA/DoRAで日本語能力を保持しつつ話者適応
+
+※ 473話者での訓練結果次第で、この方針は不要になる可能性あり。
 
 ### 実装済み機能
 
@@ -374,5 +538,8 @@ from zipvoice.models.modules.lora_utils import (
 - `--lora-dropout`: ドロップアウト率（デフォルト0.05）
 
 ### チェックポイント
+- `exp/zipvoice_japanese_473speakers_v2/`: **473話者訓練（新G2P）** - 訓練予定
+- `exp/zipvoice_japanese_473speakers/`: 473話者訓練（旧G2P）- **廃止**（G2P修正前のトークン）
 - `exp/zipvoice_japanese_dora/`: DoRAモデル（Val Loss: 0.0631）
 - `exp/zipvoice_japanese_stack4only/`: Stack 4のみ凍結モデル（Val Loss: 0.0628）
+- `exp/zipvoice_moe_90h/`: 20話者訓練モデル（ゼロショット性能なし）
