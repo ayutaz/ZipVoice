@@ -55,6 +55,8 @@ SENTIS_SUPPORTED_OPS: Set[str] = {
     "GeluFast", "MatMul2D", "MoveDim", "Narrow", "NotEqual", "RandomChoice",
     "Relu6", "RMSNormalization", "ScalarMad", "Select", "SliceSet", "Square",
     "TrueDiv", "Swish", "ScaleBias",
+    # Control flow
+    "If", "Loop", "Scan",
 }
 
 # Operators that are definitely NOT supported
@@ -78,6 +80,14 @@ SENTIS_UNSUPPORTED_OPS: Set[str] = {
     "SequenceLength",
     "SplitToSequence",
     "ConcatFromSequence",
+}
+
+# Operators that may have limited support (quantization)
+SENTIS_LIMITED_SUPPORT_OPS: Set[str] = {
+    "MatMulInteger",  # INT8 quantization - may not work on all backends
+    "DynamicQuantizeLinear",  # Dynamic quantization
+    "QLinearMatMul",
+    "QLinearConv",
 }
 
 # Supported data types
@@ -172,6 +182,11 @@ def verify_model(model_path: str, verbose: bool = False) -> Tuple[List[str], Lis
         if op_type in SENTIS_UNSUPPORTED_OPS:
             errors.append(
                 f"Operator '{op_type}' (node: {node.name}) is NOT supported by Sentis"
+            )
+        elif op_type in SENTIS_LIMITED_SUPPORT_OPS:
+            warnings.append(
+                f"Operator '{op_type}' (node: {node.name}) has limited support "
+                "(quantization op - may not work on all backends)"
             )
         elif op_type not in SENTIS_SUPPORTED_OPS:
             warnings.append(
