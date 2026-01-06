@@ -69,8 +69,34 @@ uv run python -m zipvoice.bin.train_zipvoice_distill \
 
 ### モデルエクスポート
 ```bash
-uv run python -m zipvoice.bin.onnx_export [args...]
+# 標準ONNXエクスポート
+uv run python -m zipvoice.bin.onnx_export \
+    --model-name zipvoice \
+    --model-dir exp/zipvoice \
+    --onnx-model-dir exp/zipvoice_onnx
+
+# Unity Sentis用ONNXエクスポート（推奨）
+uv run python -m zipvoice.bin.onnx_export_sentis \
+    --model-name zipvoice \
+    --model-dir exp/zipvoice \
+    --onnx-model-dir exp/zipvoice_sentis
+
+# TensorRTエクスポート
 uv run python -m zipvoice.bin.tensorrt_export [args...]
+
+# Vocos Vocoder ONNXダウンロード（Unity用）
+uv run python scripts/download_vocos_onnx.py
+
+# Sentis互換性検証
+uv run python -m zipvoice.bin.verify_sentis_onnx \
+    --onnx-dir exp/zipvoice_sentis
+```
+
+### テスト
+```bash
+uv run pytest              # 全テスト実行
+uv run pytest -v           # 詳細出力
+uv run pytest --cov        # カバレッジ付き
 ```
 
 ### コードフォーマット
@@ -122,7 +148,7 @@ runtime/           # 本番デプロイメント（NVIDIA Triton）
 
 **トークナイザ**: `EmiliaTokenizer`(中国語), `LibriTTSTokenizer`(英語), `EspeakTokenizer`(多言語)
 
-**推論バックエンド**: PyTorch / ONNX / TensorRT / Triton
+**推論バックエンド**: PyTorch / ONNX / TensorRT / Triton / Unity Sentis
 
 ## 重要な実装詳細
 
@@ -143,3 +169,30 @@ runtime/           # 本番デプロイメント（NVIDIA Triton）
 - Stage 4-6: 蒸留（2段階）
 - Stage 7-8: ONNXエクスポート
 - Stage 9-12: 推論と評価
+
+## Unity Sentis対応
+
+### 概要
+ZipVoiceはUnity Sentis（AIランタイム）でリアルタイム推論が可能です。
+
+### エクスポートファイル
+| ファイル | 内容 |
+|----------|------|
+| `text_encoder.onnx` | テキスト→条件ベクトル |
+| `fm_decoder.onnx` | Flow Matchingデコーダ |
+| `vocos.onnx` | Vocoder（HuggingFaceから取得） |
+
+### 制約事項
+- **Opset version**: 7-15（推奨: 15）
+- **テンソル次元**: 最大8次元
+- **未サポート演算子**: `log1p`（`log(1+x)`で代替済み）
+
+### Unity側で必要な実装
+- **EulerSolver**: ODE積分（5-16ステップ）
+- **ISTFT**: 逆フーリエ変換（n_fft=1024, hop_length=256）
+- **Tokenizer**: テキスト→トークン変換
+
+### 関連スクリプト
+- `zipvoice/bin/onnx_export_sentis.py`: Sentis用エクスポート
+- `zipvoice/bin/verify_sentis_onnx.py`: 互換性検証
+- `scripts/download_vocos_onnx.py`: Vocos ONNXダウンロード
