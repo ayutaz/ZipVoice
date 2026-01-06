@@ -53,9 +53,12 @@ custom_bwd = custom_amp_decorator(custom_bwd, deprecated)
 
 
 def logaddexp_onnx(x: Tensor, y: Tensor) -> Tensor:
+    """ONNX-compatible logaddexp using log(1+x) instead of log1p for Unity Sentis."""
     max_value = torch.max(x, y)
     diff = torch.abs(x - y)
-    return max_value + torch.log1p(torch.exp(-diff))
+    # Use log(1.0 + x) instead of log1p(x) for Unity Sentis compatibility
+    # log1p is not supported by Unity Sentis
+    return max_value + torch.log(1.0 + torch.exp(-diff))
 
 
 # RuntimeError: Exporting the operator logaddexp to ONNX opset version
