@@ -104,15 +104,16 @@ class TestJapaneseTokenizerWithAccent:
         tokens = tokenizer.texts_to_tokens([text])[0]
         assert "[Q]" not in tokens
 
-    def test_high_pitch_before_accent(self, tokenizer):
-        """Test that [H] appears before [L] in words with accent drop."""
-        # Use a word with clear accent drop (not heiban/flat type)
+    def test_accent_pattern_has_transitions(self, tokenizer):
+        """Test that accent pattern has both L and H transitions."""
+        # Use a word with clear accent pattern
         text = "明日は晴れです"
         tokens = tokenizer.texts_to_tokens([text])[0]
-        # [H] should appear before [L]
-        h_idx = tokens.index("[H]")
-        l_idx = tokens.index("[L]")
-        assert h_idx < l_idx
+        # Should have both [L] and [H] markers
+        assert "[L]" in tokens
+        assert "[H]" in tokens
+        # First mora is LOW (Japanese rule)
+        assert tokens[0] == "[L]"
 
     def test_pause_handling(self, tokenizer):
         """Test that pause (pau) is properly handled."""
@@ -124,11 +125,13 @@ class TestJapaneseTokenizerWithAccent:
         """Test expected output format for a known input."""
         text = "明日は晴れです。"
         tokens = tokenizer.texts_to_tokens([text])[0]
-        # Expected: [H] a sh I t a [L] w a | [H] h a r e [L] d e s U
-        # Note: Accent nucleus (A1=0) is now HIGH, drop happens at A1>0
+        # Japanese accent rule: first mora is LOW (except atamadaka)
+        # 明日: L-H-H pattern (first mora LOW)
+        # 晴れです: L-H-L pattern (first mora LOW in new phrase)
         expected_structure = [
-            "[H]",  # Start with high pitch
+            "[L]",  # First mora is LOW
             "a",
+            "[H]",  # Rise to HIGH from second mora
             "sh",
             "I",  # Devoiced vowel
             "t",
@@ -137,9 +140,10 @@ class TestJapaneseTokenizerWithAccent:
             "w",
             "a",
             "|",  # Phrase boundary
-            "[H]",  # High pitch again
+            "[L]",  # First mora of new phrase is LOW
             "h",
             "a",
+            "[H]",  # Rise to HIGH
             "r",
             "e",  # Accent nucleus (A1=0) - still high
             "[L]",  # Pitch drops after accent nucleus
@@ -176,13 +180,13 @@ class TestJapaneseTokenizerWithTokenFile:
 
     def test_token_to_id_conversion(self, tokenizer):
         """Test token to ID conversion."""
-        # Use text with clear accent drop (not heiban/flat type)
+        # Use text with clear accent pattern
         text = "明日は晴れです"
         token_ids = tokenizer.texts_to_token_ids([text])[0]
-        # First token should be [H] with ID 385
-        assert token_ids[0] == 385
-        # Should contain [L] with ID 386 (pitch drops after accent nucleus)
-        assert 386 in token_ids
+        # First token should be [L] with ID 386 (first mora is LOW)
+        assert token_ids[0] == 386
+        # Should contain [H] with ID 385 (rising pitch)
+        assert 385 in token_ids
 
     def test_question_token_id(self, tokenizer):
         """Test question marker token ID."""
@@ -211,15 +215,13 @@ class TestAccentPatterns:
     def test_atamadaka_accent(self, tokenizer):
         """Test atamadaka (頭高型) accent pattern - first mora high, rest low.
 
-        This is a critical test for the A1<=0 fix.
-        Words like つくよみ should have [H] on first mora, [L] on rest.
+        Words like 箸 (はし chopsticks) have accent on first mora.
+        Pattern: H-L (first high, rest low)
         """
-        text = "つくよみ"
+        text = "箸"  # はし - chopsticks, 頭高型
         tokens = tokenizer.texts_to_tokens([text])[0]
-        # Expected pattern: [H] ts u [L] k u | [H] y o [L] m i
-        # First mora should be high
+        # Expected: [H] h a [L] sh i
         assert tokens[0] == "[H]"
-        # Should have [L] for pitch drop
         assert "[L]" in tokens
         # [H] should come before [L]
         h_idx = tokens.index("[H]")
@@ -235,8 +237,9 @@ class TestAccentPatterns:
         tokens = tokenizer.texts_to_tokens([text])[0]
         # The accent pattern should have some HIGH markers
         assert "[H]" in tokens
-        # First phonemes should be HIGH (before or at accent nucleus)
-        assert tokens[0] == "[H]"
+        # First phonemes should be LOW (first mora before nucleus)
+        # Then HIGH for rest until nucleus
+        assert "[L]" in tokens
 
     def test_odaka_accent(self, tokenizer):
         """Test odaka (尾高型) accent pattern - pitch drops at the end."""
@@ -244,6 +247,130 @@ class TestAccentPatterns:
         tokens = tokenizer.texts_to_tokens([text])[0]
         assert "[H]" in tokens
         assert "[L]" in tokens
+
+
+class TestG2PAccentLogic:
+    """Test G2P accent logic with explicit patterns.
+
+    Japanese accent rules:
+    - First mora is LOW (except atamadaka where accent is on first mora)
+    - Morae before and at accent nucleus are HIGH
+    - Morae after accent nucleus are LOW
+    """
+
+    @pytest.fixture
+    def tokenizer(self):
+        from zipvoice.tokenizer.tokenizer import JapaneseTokenizer
+
+        return JapaneseTokenizer(use_accent=True)
+
+    def test_watashi_wa_first_mora_low(self, tokenizer):
+        """Test 私は - first mora should be LOW.
+
+        私は has accent pattern L-H-H-H:
+        - わ(L): first mora, before nucleus
+        - た(H): second mora, before nucleus
+        - し(H): third mora, before nucleus
+        - は(H): fourth mora, at nucleus
+        """
+        text = "私は"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # First token should be [L]
+        assert tokens[0] == "[L]", f"Expected [L] but got {tokens[0]}, full: {tokens}"
+        # Then [H] for the rising pitch
+        assert "[H]" in tokens
+
+    def test_hashi_bridge_first_mora_low(self, tokenizer):
+        """Test 橋 (bridge) - L-H pattern (尾高型).
+
+        橋 has accent on mora 2 (尾高型):
+        - は(L): first mora
+        - し(H): second mora, at nucleus
+        """
+        text = "橋"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # First token should be [L]
+        assert tokens[0] == "[L]", f"Expected [L] but got {tokens[0]}, full: {tokens}"
+
+    def test_hashi_chopsticks_first_mora_high(self, tokenizer):
+        """Test 箸 (chopsticks) - H-L pattern (頭高型).
+
+        箸 has accent on mora 1 (頭高型):
+        - は(H): first mora, at nucleus
+        - し(L): second mora, after nucleus
+        """
+        text = "箸"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # First token should be [H] (atamadaka)
+        assert tokens[0] == "[H]", f"Expected [H] but got {tokens[0]}, full: {tokens}"
+        # Then [L] for the drop
+        assert "[L]" in tokens
+
+    def test_konnichiwa_first_mora_low(self, tokenizer):
+        """Test こんにちは - first mora should be LOW.
+
+        こんにちは has L-H-H-H-H pattern:
+        - こ(L): first mora
+        - ん(H): second mora
+        - に(H): third mora
+        - ち(H): fourth mora
+        - は(H): fifth mora, at nucleus
+        """
+        text = "こんにちは"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # First token should be [L]
+        assert tokens[0] == "[L]", f"Expected [L] but got {tokens[0]}, full: {tokens}"
+
+    def test_toukyou_first_mora_low(self, tokenizer):
+        """Test 東京 - first mora should be LOW.
+
+        東京 has L-H-H-H pattern:
+        - と(L): first mora
+        - う(H): second mora
+        - きょ(H): third mora
+        - う(H): fourth mora, at nucleus
+        """
+        text = "東京"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # First token should be [L]
+        assert tokens[0] == "[L]", f"Expected [L] but got {tokens[0]}, full: {tokens}"
+
+    def test_ashita_first_mora_low(self, tokenizer):
+        """Test 明日 (あした) - first mora should be LOW.
+
+        明日 has L-H-H pattern:
+        - あ(L): first mora
+        - し(H): second mora
+        - た(H): third mora, at nucleus
+        """
+        text = "明日"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # First token should be [L]
+        assert tokens[0] == "[L]", f"Expected [L] but got {tokens[0]}, full: {tokens}"
+
+    def test_explicit_pattern_watashi_wa(self, tokenizer):
+        """Test exact token sequence for 私は."""
+        text = "私は"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # Expected: [L] w a [H] t a sh i w a
+        expected = ["[L]", "w", "a", "[H]", "t", "a", "sh", "i", "w", "a"]
+        assert tokens == expected, f"Expected {expected}, got {tokens}"
+
+    def test_explicit_pattern_hashi_chopsticks(self, tokenizer):
+        """Test exact token sequence for 箸 (chopsticks)."""
+        text = "箸"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # Expected: [H] h a [L] sh i
+        expected = ["[H]", "h", "a", "[L]", "sh", "i"]
+        assert tokens == expected, f"Expected {expected}, got {tokens}"
+
+    def test_explicit_pattern_hashi_bridge(self, tokenizer):
+        """Test exact token sequence for 橋 (bridge)."""
+        text = "橋"
+        tokens = tokenizer.texts_to_tokens([text])[0]
+        # Expected: [L] h a [H] sh i
+        expected = ["[L]", "h", "a", "[H]", "sh", "i"]
+        assert tokens == expected, f"Expected {expected}, got {tokens}"
 
 
 class TestAccentMarkerConstants:

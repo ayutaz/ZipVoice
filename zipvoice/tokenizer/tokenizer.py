@@ -731,14 +731,25 @@ class JapaneseTokenizer(Tokenizer):
                 result.append(self.PHRASE_BOUNDARY)
                 prev_level = None
 
-            # Get accent info (A field)
+            # Get accent info (A field: A:a1+a2+a3)
+            # a1: position relative to accent nucleus (negative=before, 0=at, positive=after)
+            # a2: mora position within accent phrase (1=first, 2=second, etc.)
             a_field = next((p for p in parts if p.startswith("A:")), "A:xx+xx+xx")
-            a1 = a_field.split("+")[0][2:]
+            a_parts = a_field[2:].split("+")
+            a1 = a_parts[0]
+            a2 = a_parts[1] if len(a_parts) > 1 else "xx"
 
-            # Determine pitch level
+            # Determine pitch level based on Japanese accent rules
             try:
                 a1_val = int(a1)
-                level = "H" if a1_val <= 0 else "L"
+                a2_val = int(a2)
+                # Japanese rule: first mora is LOW (except atamadaka where accent is on first mora)
+                if a2_val == 1 and a1_val < 0:
+                    level = "L"  # First mora before nucleus → LOW
+                elif a1_val <= 0:
+                    level = "H"  # At or before nucleus → HIGH
+                else:
+                    level = "L"  # After nucleus → LOW
             except ValueError:
                 level = "L"  # Default to low for unknown
 

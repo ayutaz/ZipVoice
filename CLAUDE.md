@@ -185,15 +185,47 @@ ZipVoiceの軽量・高速という利点を維持しながら、日本語に対
 - アクセントマーカー対応: `[H]`(高), `[L]`(低), `|`(アクセント境界), `[Q]`(疑問文)
 - トークンファイル: `data/tokens_japanese_extended.txt`
 
-#### G2P修正（2026-01-06）
+#### G2P修正履歴
+
+##### v2修正（2026-01-06）: アクセント核の判定
 アクセント核の判定条件を修正：
 ```python
 # 旧: a1_val < 0  → 新: a1_val <= 0
 level = "H" if a1_val <= 0 else "L"
 ```
 - **変更理由**: アクセント核（A1=0）も高ピッチ領域に含めるべき
-- **効果**: より自然な日本語アクセントパターンの表現
-- **テスト**: 24/24 PASSED（`tests/test_japanese_tokenizer.py`）
+
+##### v3修正（2026-01-07）: 日本語最初のモーラLOWルール
+日本語の基本アクセントルール「**最初のモーラは原則LOW**」を実装：
+```python
+# pyopenjtalk fullcontext labels
+# A1: アクセント核からの相対位置 (負=前, 0=核, 正=後)
+# A2: アクセント句内のモーラ位置 (1=最初, 2=2番目, ...)
+
+if a2_val == 1 and a1_val < 0:
+    level = "L"  # 最初のモーラかつ核より前 → LOW
+elif a1_val <= 0:
+    level = "H"  # 核またはその前 → HIGH
+else:
+    level = "L"  # 核より後 → LOW
+```
+
+**修正前後の比較**:
+| 単語 | 修正前 | 修正後 |
+|------|--------|--------|
+| 私は | `[H] w a t a sh i w a` | `[L] w a [H] t a sh i w a` |
+| 橋（尾高型） | `[H] h a sh i` | `[L] h a [H] sh i` |
+| 箸（頭高型） | `[H] h a [L] sh i` | `[H] h a [L] sh i` |
+| こんにちは | `[H] k o N n i ch i w a` | `[L] k o [H] N n i ch i w a` |
+| 東京 | `[H] t o o ky o o` | `[L] t o [H] o ky o o` |
+
+**日本語アクセントパターン**:
+- **頭高型（あたまだか）**: 最初のモーラにアクセント核 → H-L（例: 箸、今日、猫）
+- **中高型（なかだか）**: 中間にアクセント核 → L-H-L（例: 食べる）
+- **尾高型（おだか）**: 最後にアクセント核 → L-H-H（例: 橋、桜）
+- **平板型（へいばん）**: アクセント核なし → L-H-H-H（例: 東京、私は）
+
+**テスト**: 33/33 PASSED（`tests/test_japanese_tokenizer.py`）
 
 ### 学習の経緯と課題
 
@@ -452,20 +484,68 @@ DynamicBucketingSamplerは似た長さのサンプルをまとめるため、長
 2. **gradient checkpointing**: メモリ削減（訓練速度20-30%低下）
 3. **勾配累積**: 実効バッチサイズを維持しつつメモリ削減
 
-### 現在の訓練状況（2026-01-06）
+### 試行7: v3訓練（最初のモーラLOWルール修正後）
 
-**注意**: G2P修正（A1<=0判定）により、旧トークンで訓練されたv1は廃止。新G2Pでv2を開始。
+#### 背景
+v2訓練のゼロショット評価で「私は」のアクセントが不正と判明。G2Pの最初のモーラLOWルールを修正し、再訓練を実施。
+
+#### 訓練設定
 
 | 項目 | 値 |
 |------|-----|
-| 実験ディレクトリ | `exp/zipvoice_japanese_473speakers_v2/` |
-| 状態 | 新規開始（G2P修正後の再訓練） |
+| 実験ディレクトリ | `exp/zipvoice_japanese_473speakers_v3/` |
+| データセット | moe-speech-plus（473話者、37.5万サンプル） |
+| G2P | v3（最初のモーラLOWルール適用） |
 | 設定 | max-duration=100, base-lr=0.01, FP16 |
-| 推定訓練時間 | 約5.5日（130時間） |
+| 訓練期間 | 1 epoch（約7時間） |
 
-**廃止**: `exp/zipvoice_japanese_473speakers/`（旧G2Pのトークンで訓練、整合性なし）
+#### 訓練結果
 
-### 訓練開始/再開コマンド
+| 指標 | 値 |
+|------|-----|
+| 最終Validation Loss | **0.0586** |
+| 最終Train Loss | 0.0568 |
+| 進捗 | 1 epoch / 20 epoch |
+
+#### ゼロショット評価（つくよみちゃん）
+
+つくよみちゃん（訓練に含まれない話者）を使用してゼロショット評価を実施。
+
+**テスト条件**:
+- プロンプト音声: つくよみちゃんの音声（約3秒）
+- テストテキスト: 「こんにちは、私は音声合成システムです」
+- guidance_scale: 0.7
+
+**評価結果**:
+| 項目 | 評価 | 詳細 |
+|------|------|------|
+| 日本語アクセント | ○ 良い | 「私は」等のアクセントが正しく生成 |
+| ゼロショット話者類似度 | × 悪い | プロンプト話者の声色が反映されない |
+
+**結論**: G2P修正によりアクセントは改善したが、話者類似度の問題は依然として残る。473話者でも話者汎化能力の維持は困難である可能性がある。
+
+#### チェックポイント
+
+- `exp/zipvoice_japanese_473speakers_v3/best-valid-loss.pt`: 最良モデル（Val Loss: 0.0586）
+- `exp/zipvoice_japanese_473speakers_v3/epoch-1.pt`: 1 epoch完了時点
+
+---
+
+### 訓練履歴まとめ
+
+| 版 | G2P | 訓練データ | Val Loss | アクセント | 話者類似度 | 状態 |
+|----|-----|-----------|----------|-----------|-----------|------|
+| v1 | 旧（A1<0→H） | moe-speech-plus | - | × 悪い | × 悪い | 廃止 |
+| v2 | 修正1（A1<=0→H） | moe-speech-plus | 0.0581 | △ 一部不正 | × 悪い | 廃止 |
+| **v3** | 修正2（最初モーラLOW） | moe-speech-plus | **0.0586** | **○ 良い** | × 悪い | **最新** |
+
+### 今後の課題
+
+1. **話者類似度の改善**: 473話者でも話者汎化能力が不足。より大規模なデータセットまたは異なるアプローチが必要
+2. **訓練の継続**: 現在1 epochのみ。20 epoch訓練で改善する可能性
+3. **話者特化ファインチューニング**: ゼロショットを諦め、特定話者への適応を検討
+
+### 訓練再開コマンド
 
 ```bash
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python -m zipvoice.bin.train_zipvoice \
@@ -473,7 +553,7 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python -m zipvoice.bin.t
   --use-fp16 1 \
   --num-epochs 20 \
   --finetune 1 \
-  --checkpoint download/zipvoice/model.pt \
+  --checkpoint exp/zipvoice_japanese_473speakers_v3/epoch-1.pt \
   --model-config egs/zipvoice/conf/zipvoice_base.json \
   --tokenizer japanese \
   --token-file data/tokens_japanese_extended.txt \
@@ -483,13 +563,8 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run python -m zipvoice.bin.t
   --base-lr 0.01 \
   --max-duration 100 \
   --num-workers 4 \
-  --exp-dir exp/zipvoice_japanese_473speakers_v2
+  --exp-dir exp/zipvoice_japanese_473speakers_v3
 ```
-
-**訓練再開時**: `--checkpoint`を最新チェックポイント（例: `exp/zipvoice_japanese_473speakers_v2/checkpoint-5000.pt`）に変更
-
-### 評価予定
-訓練完了後、つくよみちゃん（訓練に含まれない話者）でゼロショット評価を実施。
 
 ---
 
@@ -538,8 +613,9 @@ from zipvoice.models.modules.lora_utils import (
 - `--lora-dropout`: ドロップアウト率（デフォルト0.05）
 
 ### チェックポイント
-- `exp/zipvoice_japanese_473speakers_v2/`: **473話者訓練（新G2P）** - 訓練予定
-- `exp/zipvoice_japanese_473speakers/`: 473話者訓練（旧G2P）- **廃止**（G2P修正前のトークン）
+- `exp/zipvoice_japanese_473speakers_v3/`: **473話者訓練（G2P v3: 最初モーラLOW）** - Val Loss: 0.0586、アクセント○、話者類似度×
+- `exp/zipvoice_japanese_473speakers_v2/`: 473話者訓練（G2P v2）- **廃止**（最初モーラLOWルール未適用）
+- `exp/zipvoice_japanese_473speakers/`: 473話者訓練（G2P v1）- **廃止**（旧G2P）
 - `exp/zipvoice_japanese_dora/`: DoRAモデル（Val Loss: 0.0631）
 - `exp/zipvoice_japanese_stack4only/`: Stack 4のみ凍結モデル（Val Loss: 0.0628）
 - `exp/zipvoice_moe_90h/`: 20話者訓練モデル（ゼロショット性能なし）
