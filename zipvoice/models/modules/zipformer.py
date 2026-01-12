@@ -980,21 +980,16 @@ class CompactRelPositionalEncoding(torch.nn.Module):
         self.length_factor = length_factor
         self.extend_pe(torch.tensor(0.0).expand(max_len))
 
-    def extend_pe(self, x: Tensor, left_context_len: int = 0) -> None:
-        """Reset the positional encodings."""
-        T = x.size(0) + left_context_len
+    def _compute_pe(self, T: int, device: torch.device) -> Tensor:
+        """Compute positional encodings for length T.
 
-        if self.pe is not None:
-            # self.pe contains both positive and negative parts
-            # the length of self.pe is 2 * input_len - 1
-            if self.pe.size(0) >= T * 2 - 1:
-                self.pe = self.pe.to(dtype=x.dtype, device=x.device)
-                return
+        This is a helper method that contains the core computation logic,
+        separated to avoid conditional control flow in the forward pass.
+        """
+        # if T == 4, x would contain [ -3, -2, -1, 0, 1, 2, 3 ]
+        x = torch.arange(-(T - 1), T, device=device).to(torch.float32).unsqueeze(1)
 
-        # if T == 4, x would contain [ -3, -2, 1, 0, 1, 2, 3 ]
-        x = torch.arange(-(T - 1), T, device=x.device).to(torch.float32).unsqueeze(1)
-
-        freqs = 1 + torch.arange(self.embed_dim // 2, device=x.device)
+        freqs = 1 + torch.arange(self.embed_dim // 2, device=device)
 
         # `compression_length` this is arbitrary/heuristic, if it is larger we have more
         # resolution for small time offsets but less resolution for large time offsets.
@@ -1024,12 +1019,25 @@ class CompactRelPositionalEncoding(torch.nn.Module):
         cosines = (x_atan * freqs).cos()
         sines = (x_atan * freqs).sin()
 
-        pe = torch.zeros(x.shape[0], self.embed_dim, device=x.device)
+        pe = torch.zeros(x.shape[0], self.embed_dim, device=device)
         pe[:, 0::2] = cosines
         pe[:, 1::2] = sines
         pe[:, -1] = 1.0  # for bias.
 
-        self.pe = pe.to(dtype=x.dtype)
+        return pe
+
+    def extend_pe(self, x: Tensor, left_context_len: int = 0) -> None:
+        """Reset the positional encodings."""
+        T = x.size(0) + left_context_len
+
+        if self.pe is not None:
+            # self.pe contains both positive and negative parts
+            # the length of self.pe is 2 * input_len - 1
+            if self.pe.size(0) >= T * 2 - 1:
+                self.pe = self.pe.to(dtype=x.dtype, device=x.device)
+                return
+
+        self.pe = self._compute_pe(T, x.device).to(dtype=x.dtype)
 
     def forward(self, x: Tensor, left_context_len: int = 0) -> Tensor:
         """Create positional encoding.
@@ -1041,15 +1049,24 @@ class CompactRelPositionalEncoding(torch.nn.Module):
         Returns:
             positional embedding, of shape (batch, left_context_len + 2*time-1, `*`).
         """
-        self.extend_pe(x, left_context_len)
+        # When scripting or tracing for ONNX export, we use pre-computed PE
+        # and avoid the conditional extension logic.
+        if torch.jit.is_scripting() or torch.jit.is_tracing():
+            # Use pre-computed PE without dynamic extension
+            # Assume PE was pre-computed to sufficient length during model preparation
+            pe = self.pe.to(dtype=x.dtype, device=x.device)
+        else:
+            # Normal training/inference path with dynamic extension
+            self.extend_pe(x, left_context_len)
+            pe = self.pe
+
         x_size_left = x.size(0) + left_context_len
+        pe_len = pe.size(0)
+        center = pe_len // 2
         # length of positive side: x.size(0) + left_context_len
         # length of negative side: x.size(0)
-        pos_emb = self.pe[
-            self.pe.size(0) // 2
-            - x_size_left
-            + 1 : self.pe.size(0) // 2  # noqa E203
-            + x.size(0),
+        pos_emb = pe[
+            center - x_size_left + 1 : center + x.size(0),
             :,
         ]
         pos_emb = pos_emb.unsqueeze(0)

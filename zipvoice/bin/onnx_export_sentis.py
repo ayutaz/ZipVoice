@@ -48,6 +48,7 @@ from typing import Dict, List, Set
 import onnx
 import safetensors.torch
 import torch
+from huggingface_hub import hf_hub_download
 from onnxruntime.quantization import QuantType, quantize_dynamic
 from torch import Tensor, nn
 
@@ -58,9 +59,16 @@ from zipvoice.utils.checkpoint import load_checkpoint
 from zipvoice.utils.common import AttributeDict
 from zipvoice.utils.scaling_converter import convert_scaled_to_non_scaled
 
+# HuggingFace repository for pre-trained models
+HUGGINGFACE_REPO = "k2-fsa/ZipVoice"
+MODEL_DIR = {
+    "zipvoice": "zipvoice",
+    "zipvoice_distill": "zipvoice_distill",
+}
 
 # Operators known to be unsupported by Unity Sentis
 SENTIS_UNSUPPORTED_OPS: Set[str] = {
+    "If",  # Conditional control flow - use static graphs instead
     "Log1p",  # Use Log(1+x) instead
     "LogAddExp",
     "ComplexAbs",
@@ -136,6 +144,27 @@ def add_meta_data(filename: str, meta_data: Dict[str, str]):
         meta.value = value
 
     onnx.save(model, filename)
+
+
+def _precompute_positional_encodings(model: nn.Module, max_len: int) -> None:
+    """Pre-compute positional encodings for all encoder_pos modules.
+
+    This function traverses the model and extends the positional encodings
+    to the specified maximum length. This is necessary for ONNX export to
+    avoid the conditional "If" operator that Unity Sentis doesn't support.
+
+    Args:
+        model: The ZipVoice model.
+        max_len: Maximum sequence length to pre-compute.
+    """
+    dummy_input = torch.zeros(max_len)
+
+    # Find and extend all CompactRelPositionalEncoding modules
+    for name, module in model.named_modules():
+        if hasattr(module, 'extend_pe') and hasattr(module, 'pe'):
+            module.extend_pe(dummy_input)
+            if module.pe is not None:
+                logging.info(f"  {name}: PE shape = {module.pe.shape}")
 
 
 def verify_sentis_compatibility(model_path: str) -> List[str]:
@@ -357,7 +386,10 @@ def export_fm_decoder(
         The opset version to use (default: 15 for Sentis).
     """
     feat_dim = model.feat_dim
-    seq_len = 200
+    # Use longer sequence length for tracing to ensure dynamic shapes work correctly
+    # The PE is precomputed to max_pe_len=4000, so trace with a length that covers
+    # typical use cases (up to ~2500 frames for ~100 seconds of audio)
+    seq_len = 2500
     t = torch.tensor(0.5, dtype=torch.float32)
     x = torch.randn(1, seq_len, feat_dim, dtype=torch.float32)
     text_condition = torch.randn(1, seq_len, feat_dim, dtype=torch.float32)
@@ -420,17 +452,31 @@ def main():
     params = AttributeDict()
     params.update(vars(args))
 
-    params.model_dir = Path(params.model_dir)
-    if not params.model_dir.is_dir():
-        raise FileNotFoundError(f"{params.model_dir} does not exist")
-    for filename in [params.checkpoint_name, "model.json", "tokens.txt"]:
-        if not (params.model_dir / filename).is_file():
-            raise FileNotFoundError(f"{params.model_dir / filename} does not exist")
-    model_ckpt = params.model_dir / params.checkpoint_name
-    model_config = params.model_dir / "model.json"
-    token_file = params.model_dir / "tokens.txt"
-
-    logging.info(f"Loading model from {params.model_dir}")
+    if params.model_dir is not None:
+        # Use local model directory
+        params.model_dir = Path(params.model_dir)
+        if not params.model_dir.is_dir():
+            raise FileNotFoundError(f"{params.model_dir} does not exist")
+        for filename in [params.checkpoint_name, "model.json", "tokens.txt"]:
+            if not (params.model_dir / filename).is_file():
+                raise FileNotFoundError(f"{params.model_dir / filename} does not exist")
+        model_ckpt = params.model_dir / params.checkpoint_name
+        model_config = params.model_dir / "model.json"
+        token_file = params.model_dir / "tokens.txt"
+        logging.info(f"Loading model from local directory: {params.model_dir}")
+    else:
+        # Download from HuggingFace
+        logging.info(f"Downloading {params.model_name} model from HuggingFace ({HUGGINGFACE_REPO})")
+        model_ckpt = hf_hub_download(
+            HUGGINGFACE_REPO, filename=f"{MODEL_DIR[params.model_name]}/model.pt"
+        )
+        model_config = hf_hub_download(
+            HUGGINGFACE_REPO, filename=f"{MODEL_DIR[params.model_name]}/model.json"
+        )
+        token_file = hf_hub_download(
+            HUGGINGFACE_REPO, filename=f"{MODEL_DIR[params.model_name]}/tokens.txt"
+        )
+        logging.info(f"Downloaded model files from HuggingFace")
 
     tokenizer = SimpleTokenizer(token_file)
     tokenizer_config = {"vocab_size": tokenizer.vocab_size, "pad_id": tokenizer.pad_id}
@@ -464,6 +510,12 @@ def main():
     model.eval()
 
     convert_scaled_to_non_scaled(model, inplace=True, is_onnx=True)
+
+    # Pre-compute positional encodings to a sufficient length for ONNX export
+    # This avoids the conditional "If" operator in the exported graph
+    max_pe_len = 4000  # ~170 seconds at 24kHz with hop_length=256
+    logging.info(f"Pre-computing positional encodings to max_len={max_pe_len}")
+    _precompute_positional_encodings(model, max_pe_len)
 
     logging.info("Exporting model for Unity Sentis")
     onnx_model_dir = Path(params.onnx_model_dir)

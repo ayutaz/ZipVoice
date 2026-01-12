@@ -185,7 +185,38 @@ ZipVoiceはUnity Sentis（AIランタイム）でリアルタイム推論が可�
 ### 制約事項
 - **Opset version**: 7-15（推奨: 15）
 - **テンソル次元**: 最大8次元
-- **未サポート演算子**: `log1p`（`log(1+x)`で代替済み）
+- **未サポート演算子**:
+  - `If` - 条件分岐（静的グラフに変換が必要）
+  - `Log1p` - `log(1+x)`で代替済み
+  - `FFT`, `IFFT`, `RFFT`, `IRFFT` - 信号処理系
+
+### If演算子の回避（重要）
+
+`CompactRelPositionalEncoding`クラスの`extend_pe()`メソッドに条件分岐があり、ONNX export時に`If`ノードが生成されていました。
+
+**修正済み**: `zipvoice/models/modules/zipformer.py`
+
+```python
+# forward()内でtorch.jit.is_tracing()を使用
+if torch.jit.is_scripting() or torch.jit.is_tracing():
+    pe = self.pe.to(dtype=x.dtype, device=x.device)  # 事前計算済みを使用
+else:
+    self.extend_pe(x, left_context_len)  # 動的拡張（通常推論時）
+    pe = self.pe
+```
+
+**Export前の事前計算**: `zipvoice/bin/onnx_export_sentis.py`
+
+```python
+def _precompute_positional_encodings(model: nn.Module, max_len: int) -> None:
+    """Export前にPEを事前計算"""
+    dummy_input = torch.zeros(max_len)
+    for name, module in model.named_modules():
+        if hasattr(module, 'extend_pe') and hasattr(module, 'pe'):
+            module.extend_pe(dummy_input)
+```
+
+この修正により、通常の訓練・推論では動的拡張、ONNX export時は静的グラフが生成されます。
 
 ### Unity側で必要な実装
 - **EulerSolver**: ODE積分（5-16ステップ）
