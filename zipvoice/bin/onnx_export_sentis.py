@@ -386,10 +386,12 @@ def export_fm_decoder(
         The opset version to use (default: 15 for Sentis).
     """
     feat_dim = model.feat_dim
-    # Use longer sequence length for tracing to ensure dynamic shapes work correctly
-    # The PE is precomputed to max_pe_len=4000, so trace with a length that covers
-    # typical use cases (up to ~2500 frames for ~100 seconds of audio)
-    seq_len = 2500
+    # Note: The FM decoder's positional encoding (PE) buffer has a fixed size.
+    # For the distill model, PE is pre-compiled with shape [1999, 48], limiting
+    # max seq_len to ~1000. For base model with precomputed PE, larger seq_len works.
+    # Use seq_len=200 for compatibility with both models (same as original onnx_export.py).
+    # Dynamic axes ensure the exported model can handle variable-length sequences.
+    seq_len = 200
     t = torch.tensor(0.5, dtype=torch.float32)
     x = torch.randn(1, seq_len, feat_dim, dtype=torch.float32)
     text_condition = torch.randn(1, seq_len, feat_dim, dtype=torch.float32)
